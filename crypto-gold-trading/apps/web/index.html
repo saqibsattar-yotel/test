@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Research and decision-support terminal for crypto and gold: multi-timeframe analysis, regime scoring, structured trade plans, risk sizing, journal and performance analytics." />
+    <title>Aurum Terminal</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      try {
+        var t = localStorage.getItem("aurum-ui");
+        if (t) {
+          var s = JSON.parse(t);
+          var theme = s && s.state && s.state.theme;
+          if (theme === "light" || theme === "dark") document.documentElement.setAttribute("data-theme", theme);
+          else if (theme === "system") document.documentElement.setAttribute("data-theme", window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

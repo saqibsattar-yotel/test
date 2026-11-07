@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+data/*.json
+!data/official-schedule.json
+data/cache/
+!data/.gitkeep
+*.log
+.DS_Store

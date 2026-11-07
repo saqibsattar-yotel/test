@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Design tokens. Dark is the primary theme (charcoal / deep navy); light is a full
+  second theme, not an inversion. Chart series colours are the validated dataviz
+  palette steps for each surface; bull/bear/gold/warning/critical are status tokens.
+*/
+:root {
+  color-scheme: dark;
+  --page: #0a0e14;
+  --surface-1: #10161f;
+  --surface-2: #161e2a;
+  --surface-3: #1c2634;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --ink-1: #e8ebf0;
+  --ink-2: #a6adbb;
+  --ink-3: #7b8596;
+  --accent: #3987e5;
+  --accent-soft: rgba(57, 135, 229, 0.16);
+  --bull: #22c55e;
+  --bull-soft: rgba(34, 197, 94, 0.14);
+  --bear: #ef5350;
+  --bear-soft: rgba(239, 83, 80, 0.14);
+  --gold: #d4a537;
+  --gold-soft: rgba(212, 165, 55, 0.14);
+  --warning: #fab219;
+  --critical: #d03b3b;
+  --grid: #1b2430;
+  --axis: #2a3544;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --focus: 0 0 0 2px var(--page), 0 0 0 4px var(--accent);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #f3f4f7;
+  --surface-1: #ffffff;
+  --surface-2: #f7f8fa;
+  --surface-3: #eef0f4;
+  --line: rgba(15, 23, 42, 0.1);
+  --line-strong: rgba(15, 23, 42, 0.18);
+  --ink-1: #0b1220;
+  --ink-2: #4b5563;
+  --ink-3: #6b7280;
+  --accent: #2a78d6;
+  --accent-soft: rgba(42, 120, 214, 0.12);
+  --bull: #15803d;
+  --bull-soft: rgba(21, 128, 61, 0.12);
+  --bear: #c62828;
+  --bear-soft: rgba(198, 40, 40, 0.12);
+  --gold: #a16207;
+  --gold-soft: rgba(161, 98, 7, 0.12);
+  --warning: #b45309;
+  --critical: #b91c1c;
+  --grid: #e5e7eb;
+  --axis: #cbd5e1;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #e34948;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  @apply bg-page text-ink-1 font-sans antialiased;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-tap-highlight-color: transparent;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 8px;
+}
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+  border-radius: 6px;
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+.card {
+  @apply bg-surface-1 border border-line rounded-xl;
+}
+.hairline {
+  border-color: var(--line);
+}
+.text-bull {
+  color: var(--bull);
+}
+.text-bear {
+  color: var(--bear);
+}
+.text-gold {
+  color: var(--gold);
+}
+.bg-bull-soft {
+  background: var(--bull-soft);
+}
+.bg-bear-soft {
+  background: var(--bear-soft);
+}
+.bg-gold-soft {
+  background: var(--gold-soft);
+}
+.bg-accent-soft {
+  background: var(--accent-soft);
+}
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+  @apply rounded-md;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+.fade-in {
+  animation: fadeIn 180ms ease-out;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.refetching {
+  opacity: 0.6;
+  transition: opacity 150ms;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
