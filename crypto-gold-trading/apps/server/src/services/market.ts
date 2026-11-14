@@ -1,21 +1,26 @@
 /**
  * Unified market-data service. Providers are tried in order; results are cached with
- * stale-while-error semantics; when everything fails and demo mode allows it, an
+ * stale-while-error semantics; when everything fails for a coin and demo mode allows it, an
  * explicit DEMO payload is returned (quality: "demo") so the UI can say so.
+ *
+ * Spot gold and silver are the exception: in the default mode they are never replaced by synthetic
+ * data. Missing history is reported as unavailable and a missing quote is left out, because the
+ * other half (the real price, or the real chart) is on the same screen. `DEMO_MODE=force` still
+ * shows demo data for everything, explicitly.
  */
 import type { AssetId, Candle, DataSource, Quote, Timeframe } from "@terminal/core";
-import { ASSETS, CRYPTO_ASSETS, demoCandles, demoSource, resolveAsset, startOfUtcDay } from "@terminal/core";
+import { ASSETS, CRYPTO_ASSETS, demoCandles, demoSource, isMetalAsset, resolveAsset, startOfUtcDay } from "@terminal/core";
 import { config } from "../config";
 import { cache } from "../lib/cache";
-import { logger } from "../lib/logger";
+import { clearReported, logger, reportOnce } from "../lib/logger";
 import { JsonStore } from "../lib/store";
-import { isWarming } from "../lib/warming";
+import { isUnavailable, isWarming } from "../lib/warming";
 import { BinanceFuturesProvider, BinanceSpotProvider } from "../providers/binance";
 import { BybitProvider, CoinbaseProvider } from "../providers/fallbacks";
 import { getGlobal, getTopCoins, STABLE_OR_WRAPPED, type CoinMarket, type GlobalMarket } from "../providers/coingecko";
 import { getFearGreed, type FearGreed } from "../providers/sentiment";
-import { TwelveDataGoldProvider } from "../providers/gold";
-import { GoldSpotProvider, getDxy, getInstrumentCandles } from "./gold";
+import { TwelveDataMetalProvider } from "../providers/twelvedata";
+import { MetalSpotProvider, getDxy, getInstrumentCandles } from "./metals";
 import { getFredSeries, getRealYields, getSyntheticDxy, getTreasuryYields, type MacroSeries } from "../providers/macro";
 import type { CandleProvider, CandleResult, DerivativesProvider, FundingInfo, OpenInterestInfo, QuoteProvider } from "../providers/types";
 
@@ -39,16 +44,17 @@ export class MarketDataService {
   private binanceFutures = new BinanceFuturesProvider();
   private bybit = new BybitProvider();
   private coinbase = new CoinbaseProvider();
-  private twelve = new TwelveDataGoldProvider();
-  private goldSpot = new GoldSpotProvider();
+  private twelve = new TwelveDataMetalProvider();
+  private metalSpot = new MetalSpotProvider();
   private dominanceStore = new JsonStore<DominanceHistory>("dominance-history", () => ({ observations: [] }));
 
+  // Spot gold and silver come from the metals providers only; a crypto venue never stands in for them.
   private candleChain(assetId: AssetId): CandleProvider[] {
-    if (assetId === "XAUUSD") return [this.twelve, this.goldSpot].filter((p) => p.supports(assetId));
+    if (isMetalAsset(assetId)) return [this.twelve, this.metalSpot].filter((p) => p.supports(assetId));
     return [this.binance, this.bybit, this.coinbase].filter((p) => p.supports(assetId));
   }
   private quoteChain(assetId: AssetId): QuoteProvider[] {
-    if (assetId === "XAUUSD") return [this.twelve, this.goldSpot].filter((p) => p.supports(assetId));
+    if (isMetalAsset(assetId)) return [this.twelve, this.metalSpot].filter((p) => p.supports(assetId));
     return [this.binance, this.bybit, this.coinbase].filter((p) => p.supports(assetId));
   }
 
@@ -63,40 +69,48 @@ export class MarketDataService {
           try {
             const r = await p.getCandles(assetId, timeframe, limit);
             if (r.candles.length === 0) throw new Error("empty candle set");
+            clearReported(`candles:${p.id}:${assetId}:${timeframe}`); // working again: a later failure is reported straight away
             return r;
           } catch (err) {
-            if (isWarming(err)) throw err; // first-start download in progress: not a provider failure
+            // A first-start download in progress, or history known to be out: not a provider failure to report
+            // on every request, and never something to paper over with another source.
+            if (isWarming(err) || isUnavailable(err)) throw err;
             lastErr = err;
-            log.warn(`${p.id} candles failed for ${assetId} ${timeframe}: ${(err as Error).message}`);
+            reportOnce(`candles:${p.id}:${assetId}:${timeframe}`, () => log.warn(`${p.id} candles failed for ${assetId} ${timeframe}: ${(err as Error).message}`));
           }
         }
         throw lastErr instanceof Error ? lastErr : new Error("all candle providers failed");
       });
       if (res.stale) warnings.push(`Serving cached candles from ${new Date(res.storedAt).toISOString()} — refresh failed: ${res.error}`);
+      // A series with gaps is re-read soon, so the warning disappears as soon as the missing files have arrived.
+      if (res.value.source.incomplete && !res.fromCache) cache.set(key, res.value, 30_000);
+      if (res.value.source.incomplete) warnings.push(`${resolveAsset(assetId).symbol} ${timeframe}: part of the price history could not be downloaded yet, so the series has gaps. It is completed automatically; setups are withheld until then.`);
       const source: DataSource = res.stale ? { ...res.value.source, quality: "stale", note: `${res.value.source.note ?? ""} Cached copy; upstream refresh failed.`.trim() } : res.value.source;
       return { candles: res.value.candles, source, assetId, timeframe, warnings };
     } catch (err) {
       // Data that is merely still downloading is never replaced by demo data: the caller retries.
-      if (isWarming(err)) throw err;
-      if (config.DEMO_MODE === "off") throw err;
-      log.error(`All providers failed for ${assetId} ${timeframe}; serving DEMO data`, err);
+      if (isWarming(err) || isUnavailable(err)) throw err;
+      // A spot metal's history is never stood in for by synthetic candles either: its real price is on the
+      // same screen, and a demo chart next to it would mislead however it is labelled.
+      if (config.DEMO_MODE === "off" || isMetalAsset(assetId)) throw err;
+      reportOnce(`demo-candles:${assetId}:${timeframe}`, () => log.error(`All providers failed for ${assetId} ${timeframe}; serving DEMO data`, err));
       return { ...this.demoCandles(assetId, timeframe, limit, (err as Error).message), assetId, timeframe, warnings: [`Live data unavailable (${(err as Error).message}). Showing DEMO data.`] };
     }
   }
 
   /** Up to `bars` candles (max 3000) by paging backwards; used by the backtester. */
   async getCandlesExtended(assetId: AssetId, timeframe: Timeframe, bars: number): Promise<CandlePayload> {
-    if (assetId === "XAUUSD" && !config.hasTwelveData && config.DEMO_MODE !== "force") {
+    if (isMetalAsset(assetId) && !config.hasTwelveData && config.DEMO_MODE !== "force") {
       // A backtest is an explicit, long-running request: wait for the archive (bounded) rather than
       // answering "still downloading" after a couple of seconds.
-      const r = await this.goldSpot.getCandles(assetId, timeframe, bars, 90_000);
+      const r = await this.metalSpot.getCandles(assetId, timeframe, bars, 90_000);
       return { ...r, assetId, timeframe, warnings: [], source: { ...r.source, note: `${r.source.note ?? ""} Extended history from the Dukascopy archive (${r.candles.length} bars).`.trim() } };
     }
     const first = await this.getCandles(assetId, timeframe, Math.min(1000, bars));
     if (first.source.quality === "demo" || first.candles.length >= bars) return first;
-    if (assetId === "XAUUSD") {
+    if (isMetalAsset(assetId)) {
       if (first.source.provider === "twelvedata") return first;
-      const candles = await getInstrumentCandles("XAUUSD", timeframe, bars);
+      const candles = await getInstrumentCandles(assetId, timeframe, bars);
       return { ...first, candles, source: { ...first.source, note: `${first.source.note ?? ""} Extended history from the Dukascopy archive (${candles.length} bars).`.trim() } };
     }
     const key = `candles-ext:${assetId}:${timeframe}:${bars}`;
@@ -128,36 +142,38 @@ export class MarketDataService {
       const res = await cache.getOrLoad<{ quotes: Quote[]; warming: AssetId[] }>(key, 5_000, async () => {
         const out: Quote[] = [];
         const warming: AssetId[] = [];
-        const crypto = assetIds.filter((a) => a !== "XAUUSD");
+        const crypto = assetIds.filter((a) => !isMetalAsset(a));
         if (crypto.length) {
           try {
             out.push(...(await this.binance.getQuotes(crypto)));
           } catch (err) {
-            log.warn(`binance batch quotes failed: ${(err as Error).message}`);
+            reportOnce("quotes:binance-batch", () => log.warn(`binance batch quotes failed: ${(err as Error).message} (falling back to single quotes; reported at most every five minutes)`));
             for (const a of crypto) {
               const q = await this.quoteWithFallback(a).catch(() => null);
               if (q) out.push(q);
             }
           }
         }
-        if (assetIds.includes("XAUUSD")) {
-          try {
-            out.push(await this.quoteWithFallback("XAUUSD"));
-          } catch (err) {
-            if (isWarming(err)) warming.push("XAUUSD");
-          }
-        }
+        // Each metal on its own: one that is still downloading (or failing) never holds the other back.
+        // A feed outage is reported once by the live sampler, not here on every poll.
+        const metalIds = assetIds.filter(isMetalAsset);
+        const metals = await Promise.allSettled(metalIds.map((a) => this.quoteWithFallback(a)));
+        metals.forEach((r, i) => {
+          if (r.status === "fulfilled") out.push(r.value);
+          else if (isWarming(r.reason)) warming.push(metalIds[i]);
+        });
         if (out.length === 0 && warming.length === 0) throw new Error("no quotes from any provider");
         return { quotes: out, warming };
       });
       const quotes = res.value.quotes.map((q) => (res.stale ? { ...q, source: { ...q.source, quality: "stale" as const } } : q));
-      // Fill in any asset that is missing with demo (auto) or omit (off). An asset whose data is still being
+      // Fill in any coin that is missing with demo (auto) or omit (off). An asset whose data is still being
       // downloaded for the first time is left out instead: it is not unavailable, and a demo price would mislead.
-      if (config.DEMO_MODE === "auto") for (const a of assetIds) if (!quotes.some((q) => q.assetId === a) && !res.value.warming.includes(a)) quotes.push(this.demoQuote(a));
+      // A spot metal is never given a synthetic price in this mode: when its quote feed is out, the price is missing.
+      if (config.DEMO_MODE === "auto") for (const a of assetIds) if (!isMetalAsset(a) && !quotes.some((q) => q.assetId === a) && !res.value.warming.includes(a)) quotes.push(this.demoQuote(a));
       return quotes;
     } catch (err) {
       if (config.DEMO_MODE === "off") throw err;
-      return assetIds.map((a) => this.demoQuote(a, (err as Error).message));
+      return assetIds.filter((a) => !isMetalAsset(a)).map((a) => this.demoQuote(a, (err as Error).message));
     }
   }
 
@@ -291,7 +307,8 @@ export class MarketDataService {
     return { series, weights, note: `${Object.keys(series).length} alts from CoinGecko top-40 (ex-stables/wrapped) with Binance daily closes` };
   }
 
-  async getMacro(): Promise<{ dxy: MacroSeries | null; dgs10: MacroSeries | null; dgs2: MacroSeries | null; real10: MacroSeries | null; curve: MacroSeries | null; errors: string[] }> {
+  /** `dxyWarming`: the close-based dollar-index history is still downloading, so `dxy` is the ECB reference-rate series for now. */
+  async getMacro(): Promise<{ dxy: MacroSeries | null; dgs10: MacroSeries | null; dgs2: MacroSeries | null; real10: MacroSeries | null; curve: MacroSeries | null; errors: string[]; dxyWarming: boolean }> {
     const errors: string[] = [];
     const wrap = async <T>(key: string, ttl: number, fn: () => Promise<T>): Promise<T | null> => {
       try {
@@ -314,9 +331,9 @@ export class MarketDataService {
       if (realDxy && realDxy.history1d.length > 20) {
         const points = realDxy.history1d.map((c) => ({ date: new Date(c.time).toISOString().slice(0, 10), value: c.value }));
         const latest = points[points.length - 1].value;
-        return { dxy: { id: "DXY", label: "US Dollar Index (DXY)", unit: "index", points, latest, change1d: points.length > 1 ? latest - points[points.length - 2].value : null, change20d: points.length > 20 ? latest - points[points.length - 21].value : null, source: realDxy.source }, dgs10, dgs2, real10, curve, errors };
+        return { dxy: { id: "DXY", label: "US Dollar Index (DXY)", unit: "index", points, latest, change1d: points.length > 1 ? latest - points[points.length - 2].value : null, change20d: points.length > 20 ? latest - points[points.length - 21].value : null, source: realDxy.source }, dgs10, dgs2, real10, curve, errors, dxyWarming: !!realDxy?.historyWarming };
       }
-      return { dxy: dxy ?? (await wrap("dxy:synthetic", sixHours, () => getSyntheticDxy())), dgs10, dgs2, real10, curve, errors };
+      return { dxy: dxy ?? (await wrap("dxy:synthetic", sixHours, () => getSyntheticDxy())), dgs10, dgs2, real10, curve, errors, dxyWarming: !!realDxy?.historyWarming };
     }
     const [yields, real10, realDxy] = await Promise.all([wrap("treasury:yields", sixHours, getTreasuryYields), wrap("treasury:real", sixHours, getRealYields), getDxy().catch((err) => (errors.push(`dxy: ${(err as Error).message}`), null))]);
     let dxy: MacroSeries | null = null;
@@ -327,7 +344,7 @@ export class MarketDataService {
       const latest = points[points.length - 1].value;
       dxy = { id: "DXY", label: "US Dollar Index (DXY)", unit: "index", points, latest, change1d: points.length > 1 ? latest - points[points.length - 2].value : null, change20d: points.length > 20 ? latest - points[points.length - 21].value : null, source: realDxy.source };
     } else dxy = await wrap("dxy:synthetic", sixHours, () => getSyntheticDxy());
-    return { dxy, dgs10: yields?.dgs10 ?? null, dgs2: yields?.dgs2 ?? null, real10, curve: yields?.curve2s10s ?? null, errors };
+    return { dxy, dgs10: yields?.dgs10 ?? null, dgs2: yields?.dgs2 ?? null, real10, curve: yields?.curve2s10s ?? null, errors, dxyWarming: !!realDxy?.historyWarming };
   }
 
   async getExchangeFilters(assetId: AssetId) {

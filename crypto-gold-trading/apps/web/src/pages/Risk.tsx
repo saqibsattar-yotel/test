@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
-import { assetBase, type AssetId, type InstrumentSpec } from "@terminal/core";
+import { METALS, assetBase, instrumentKindFitsAsset, isExchangeFuturesKind, isMetalAsset, isMetalCfdKind, type AssetId, type InstrumentSpec } from "@terminal/core";
 import { Badge, Button, Card, Checkmark, Disclaimer, Field, Input, Meter, PageHeader, Segmented, Select, Toggle, Tooltip } from "@/components/ui";
 import { AssetPicker } from "@/components/ui/AssetPicker";
 import { useCircuitBreaker, useGateMutation, useInstruments, useSettings, useSizeMutation } from "@/lib/queries";
@@ -44,7 +44,12 @@ export default function Risk() {
     }
   }, [settings.data]);
   const specs = instruments.data?.instruments ?? [];
-  const relevant = useMemo(() => specs.filter((s) => (asset === "XAUUSD" ? s.kind.startsWith("gold") : s.kind.startsWith("crypto"))), [specs, asset]);
+  // Each metal has its own instruments (XAU or XAG CFD lots, COMEX GC/MGC or SI/SIL); every coin shares the crypto ones.
+  const relevant = useMemo(() => specs.filter((s) => instrumentKindFitsAsset(s.kind, asset)), [specs, asset]);
+  useEffect(() => {
+    // A custom specification starts from the kind that fits the chosen asset.
+    setCKind((kind) => (instrumentKindFitsAsset(kind, asset) ? kind : isMetalAsset(asset) ? `${METALS[asset].metal}_cfd` : "crypto_spot"));
+  }, [asset]);
   useEffect(() => {
     if (!relevant.length) return;
     const preferred = relevant.find((s) => s.id.includes(asset.replace("USD", "USDT"))) ?? relevant[0];
@@ -63,7 +68,7 @@ export default function Risk() {
       takeProfit: tp === "" ? null : parseFloat(tp),
       leverage: leverage === "" ? null : parseFloat(leverage),
       specId: custom ? undefined : specId,
-      customSpec: custom ? { kind: cKind, contractSize: parseFloat(cSize), tickSize: parseFloat(cTick), qtyStep: parseFloat(cStep), minQty: parseFloat(cMin), label: "Custom instrument", baseUnit: asset === "XAUUSD" ? "oz" : assetBase(asset), quantityUnit: cKind.includes("futures") || cKind === "crypto_futures_cme" ? "contracts" : cKind === "gold_cfd" ? "lots" : assetBase(asset), hardTickGrid: cKind.includes("futures") } : undefined,
+      customSpec: custom ? { kind: cKind, contractSize: parseFloat(cSize), tickSize: parseFloat(cTick), qtyStep: parseFloat(cStep), minQty: parseFloat(cMin), label: "Custom instrument", baseUnit: isMetalAsset(asset) ? "oz" : assetBase(asset), quantityUnit: isExchangeFuturesKind(cKind) ? "contracts" : isMetalCfdKind(cKind) ? "lots" : assetBase(asset), hardTickGrid: isExchangeFuturesKind(cKind) } : undefined,
       fxQuoteToAccount: currency === "USD" || currency === "USDT" ? 1 : parseFloat(fx) || 1,
     });
   };
@@ -72,7 +77,7 @@ export default function Risk() {
   const runGate = () => gate.mutate({ entryInWrittenPlan: plan.written, stopPredefined: plan.stopDefined, sizeWithinPlan: plan.sizeOk, plannedRiskAmount: r ? r.riskBudgetAccount : null, actualRiskAmount: r ? r.potentialLossAccount : null, assetId: asset, direction });
   return (
     <div className="space-y-4">
-      <PageHeader title="Risk Calculator" description="Deterministic position sizing with real instrument specifications: spot crypto, USDT perpetuals, XAU/USD CFD lots, COMEX GC/MGC and CME BTC/MBT futures. Margin is an estimate; exchange margin is never computed for futures." />
+      <PageHeader title="Risk Calculator" description="Deterministic position sizing with real instrument specifications: spot crypto, USDT perpetuals, XAU/USD and XAG/USD CFD lots, COMEX gold (GC/MGC) and silver (SI/SIL) futures, and CME BTC/MBT futures. Margin is an estimate; exchange margin is never computed for futures." />
       <div className="grid xl:grid-cols-[minmax(0,1fr)_420px] gap-4">
         <div className="space-y-4">
           <Card title="Trade parameters">
@@ -96,7 +101,7 @@ export default function Risk() {
               <Field label="Instrument specification" className="sm:col-span-2">
                 {custom ? (
                   <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                    <Select value={cKind} onChange={(e) => setCKind(e.target.value as InstrumentSpec["kind"])}><option value="crypto_spot">crypto spot</option><option value="crypto_perp">crypto perp</option><option value="crypto_futures_cme">crypto futures</option><option value="gold_cfd">gold CFD</option><option value="gold_futures">gold futures</option></Select>
+                    <Select value={cKind} onChange={(e) => setCKind(e.target.value as InstrumentSpec["kind"])}><option value="crypto_spot">crypto spot</option><option value="crypto_perp">crypto perp</option><option value="crypto_futures_cme">crypto futures</option><option value="gold_cfd">gold CFD</option><option value="gold_futures">gold futures</option><option value="silver_cfd">silver CFD</option><option value="silver_futures">silver futures</option></Select>
                     <Input type="number" value={cSize} onChange={(e) => setCSize(e.target.value)} placeholder="contract size" title="Contract / lot size in base units" />
                     <Input type="number" value={cTick} onChange={(e) => setCTick(e.target.value)} placeholder="tick" title="Tick size" />
                     <Input type="number" value={cStep} onChange={(e) => setCStep(e.target.value)} placeholder="qty step" title="Quantity step" />
@@ -112,7 +117,7 @@ export default function Risk() {
               <div className="mt-3 rounded-lg bg-surface-2 border border-line p-3 text-xs text-ink-2 space-y-1">
                 <div className="flex flex-wrap gap-x-4 gap-y-1"><span><span className="text-ink-3">Contract size</span> {spec.contractSize} {spec.baseUnit}</span><span><span className="text-ink-3">Tick</span> {spec.tickSize} (= {fmtMoney(spec.tickSize * spec.contractSize)} per {spec.quantityUnit.replace(/s$/, "")})</span><span><span className="text-ink-3">Qty step</span> {spec.qtyStep}</span><span><span className="text-ink-3">Min qty</span> {spec.minQty}</span>{spec.minNotional && <span><span className="text-ink-3">Min notional</span> {spec.minNotional}</span>}{spec.maxLeverage && <span><span className="text-ink-3">Max leverage</span> {spec.maxLeverage}x</span>}</div>
                 <div className="text-ink-3">Source: {spec.source}{spec.verified ? ` · verified ${spec.verified}` : ""}</div>
-                <div className={cls(spec.kind === "gold_cfd" ? "text-warn" : "text-ink-3")}>{spec.note}</div>
+                <div className={cls(isMetalCfdKind(spec.kind) ? "text-warn" : "text-ink-3")}>{spec.note}</div>
               </div>
             )}
             <div className="mt-4 flex items-center gap-3">
@@ -200,7 +205,7 @@ export default function Risk() {
                 ))}
               </tbody>
             </table>
-            <p className="px-4 py-2 text-[10.5px] text-ink-3 border-t border-line">Not all brokers use 100 oz gold lots or the same leverage; CFD rows are conventions — use the custom specification for your broker's contract.</p>
+            <p className="px-4 py-2 text-[10.5px] text-ink-3 border-t border-line">Not all brokers use 100 oz gold lots, 5,000 oz silver lots or the same leverage; CFD rows are conventions — use the custom specification for your broker's contract.</p>
           </Card>
           <Disclaimer />
         </div>

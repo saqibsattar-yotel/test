@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { analyzeCryptoRegime, fundingComponent, btcTrendComponent, dominanceComponent, analyzeGoldRegime, dominanceProxyFromCloses, demoCandles } from "../src";
+import { analyzeCryptoRegime, fundingComponent, btcTrendComponent, dominanceComponent, analyzeGoldRegime, analyzeMetalRegime, explainMetalRegime, dominanceProxyFromCloses, demoCandles } from "../src";
 
 const rising = (n: number, start = 100, step = 0.3) => Array.from({ length: n }, (_, i) => start + i * step + Math.sin(i / 9) * 2);
 const falling = (n: number, start = 400, step = 0.3) => Array.from({ length: n }, (_, i) => start - i * step + Math.sin(i / 9) * 2);
@@ -85,5 +85,59 @@ describe("gold posture", () => {
     expect(r.components.find((c) => c.id === "dollar")!.dataAvailable).toBe(false);
     expect(r.components.find((c) => c.id === "rates")!.dataAvailable).toBe(false);
     expect(r.score).not.toBeNull(); // 3 components ≥ 60% weight remain
+  });
+});
+
+describe("silver posture", () => {
+  const uptrend = (assetId: string) => {
+    const candles = demoCandles(assetId, "1d", 400, Date.UTC(2026, 10, 7));
+    candles.forEach((c, i) => {
+      const f = 1 + i * 0.002;
+      c.open *= f;
+      c.high *= f;
+      c.low *= f;
+      c.close *= f;
+    });
+    return candles;
+  };
+  const dxy = Array.from({ length: 120 }, (_, i) => 105 - i * 0.03);
+  const real = Array.from({ length: 120 }, (_, i) => 2.2 - i * 0.004);
+
+  it("uses the same five components and weights as gold, on silver's own prices", () => {
+    const r = analyzeMetalRegime({ metal: "silver", daily: uptrend("XAGUSD"), dxyDaily: dxy, realYield10y: real, asOf: 0 });
+    expect(r.metal).toBe("silver");
+    expect(r.score).not.toBeNull();
+    expect(r.components.map((c) => c.id)).toEqual(["silver_trend", "dollar", "rates", "momentum", "volatility"]);
+    expect(r.components.map((c) => c.weight)).toEqual([0.3, 0.2, 0.2, 0.15, 0.15]);
+    expect(r.components[0].label).toBe("Silver Trend Structure");
+    expect(Object.values(r.effectiveWeights).reduce((a, b) => a + b, 0)).toBeCloseTo(1, 9);
+    expect(["CONSTRUCTIVE", "MIXED"]).toContain(r.zone);
+    expect(r.methodology).toContain("silver trend 30%");
+    expect(r.methodology).toContain("industrial demand"); // what the composite does not measure is stated
+  });
+  it("words every reading for silver, never for gold", () => {
+    const r = analyzeMetalRegime({ metal: "silver", daily: uptrend("XAGUSD"), dxyDaily: dxy, realYield10y: real, asOf: 0 });
+    const text = [...r.components.map((c) => `${c.label} ${c.signal}`), r.guidance, ...explainMetalRegime(r)].join(" ").toLowerCase();
+    expect(text).toContain("silver");
+    expect(text).not.toMatch(/\bgold\b/);
+    expect(explainMetalRegime(r)[0]).toMatch(/^Silver macro-technical posture/);
+    const defensive = analyzeMetalRegime({ metal: "silver", daily: demoCandles("XAGUSD", "1d", 400, Date.UTC(2026, 10, 7)).map((c, i) => ({ ...c, open: c.open * (1 - i * 0.0015), high: c.high * (1 - i * 0.0015), low: c.low * (1 - i * 0.0015), close: c.close * (1 - i * 0.0015) })), dxyDaily: dxy.map((v, i) => v + i * 0.08), realYield10y: real.map((v, i) => v + i * 0.01), asOf: 0 });
+    expect(defensive.guidance.toLowerCase()).not.toMatch(/\bgold\b/);
+  });
+  it("keeps gold's result unchanged and labelled as gold", () => {
+    const gold = uptrend("XAUUSD");
+    const viaWrapper = analyzeGoldRegime({ goldDaily: gold, dxyDaily: dxy, realYield10y: real, asOf: 0 });
+    const direct = analyzeMetalRegime({ metal: "gold", daily: gold, dxyDaily: dxy, realYield10y: real, asOf: 0 });
+    expect(viaWrapper).toEqual(direct);
+    expect(viaWrapper.metal).toBe("gold");
+    expect(viaWrapper.components[0].id).toBe("gold_trend");
+    expect(viaWrapper.methodology).not.toContain("industrial");
+    expect(explainMetalRegime(viaWrapper)[0]).toMatch(/^Gold macro-technical posture/);
+  });
+  it("fails closed without enough silver history", () => {
+    const r = analyzeMetalRegime({ metal: "silver", daily: demoCandles("XAGUSD", "1d", 30, Date.UTC(2026, 10, 7)), asOf: 0 });
+    expect(r.score).toBeNull();
+    expect(r.zone).toBe("UNKNOWN");
+    expect(explainMetalRegime(r)[0]).toMatch(/^Silver posture: UNKNOWN/);
   });
 });

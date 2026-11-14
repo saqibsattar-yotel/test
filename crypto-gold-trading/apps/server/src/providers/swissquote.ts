@@ -1,5 +1,5 @@
 /**
- * Swissquote public best-bid/offer feed (keyless). Live spot quotes for XAU/USD and the
+ * Swissquote public best-bid/offer feed (keyless). Live spot quotes for XAU/USD, XAG/USD and the
  * six FX constituents of the US Dollar Index.
  */
 import { fetchJson } from "../lib/http";
@@ -40,13 +40,14 @@ export async function getLiveDxyFromSwissquote(): Promise<{ value: number; ts: n
   return { value: dxyFromRates(r), ts: Math.min(...quotes.map((q) => q.ts)), components: r };
 }
 
-export async function getGoldApiPrice(): Promise<{ price: number; ts: number }> {
-  const d = await fetchJson<{ price: number; updatedAt: string }>("https://api.gold-api.com/price/XAU", { timeoutMs: 10_000, retries: 1 });
-  if (!(d.price > 0)) throw new Error("gold-api.com: no price");
+/** gold-api.com: an independent keyless spot feed for gold (XAU) and silver (XAG), used only to cross-check. */
+export async function getMetalApiPrice(code: "XAU" | "XAG"): Promise<{ price: number; ts: number }> {
+  const d = await fetchJson<{ price: number; updatedAt: string }>(`https://api.gold-api.com/price/${code}`, { timeoutMs: 10_000, retries: 1 });
+  if (!(d.price > 0)) throw new Error(`gold-api.com: no ${code} price`);
   return { price: d.price, ts: Date.parse(d.updatedAt) || Date.now() };
 }
 
-/** Spot gold / FX trade from Sunday ~22:00 UTC to Friday ~22:00 UTC. */
+/** Spot gold, spot silver and FX trade from Sunday ~22:00 UTC to Friday ~22:00 UTC. */
 export function isSpotMarketOpen(now: number): boolean {
   const d = new Date(now);
   const day = d.getUTCDay();

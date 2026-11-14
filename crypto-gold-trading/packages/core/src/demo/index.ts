@@ -29,13 +29,17 @@ const DEMO_ANCHORS: Record<string, number> = {
   AVAXUSD: 28,
   LINKUSD: 13.5,
   XAUUSD: 2650,
+  XAGUSD: 31,
 };
+
+/** Per-hour volatility of the synthetic series: metals move less than coins, silver more than gold. */
+const DEMO_HOURLY_VOL: Record<string, number> = { XAUUSD: 0.0035, XAGUSD: 0.006 };
 
 export function demoCandles(assetId: AssetId, timeframe: Timeframe, count: number, endTime: number, seed = 42): Candle[] {
   const rnd = seededRandom(seed + assetId.length * 31 + timeframe.length * 7);
   const barMs = TIMEFRAME_MS[timeframe];
   const anchor = DEMO_ANCHORS[assetId] ?? 0.5 + (Array.from(assetId).reduce((a, c) => a + c.charCodeAt(0), 0) % 400);
-  const volPerBar = (assetId === "XAUUSD" ? 0.0035 : 0.012) * Math.sqrt(barMs / 3_600_000);
+  const volPerBar = (DEMO_HOURLY_VOL[assetId] ?? 0.012) * Math.sqrt(barMs / 3_600_000);
   const start = Math.floor(endTime / barMs) * barMs - (count - 1) * barMs;
   const out: Candle[] = [];
   let price = anchor * (0.9 + rnd() * 0.2);

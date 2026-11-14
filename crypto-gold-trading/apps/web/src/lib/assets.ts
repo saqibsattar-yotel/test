@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { resolveAsset, type AssetMeta } from "@terminal/core";
+import { resolveAsset, type AssetClass, type AssetMeta } from "@terminal/core";
 import { api } from "./api";
 
 export interface AssetInfo {
@@ -8,7 +8,7 @@ export interface AssetInfo {
   symbol: string;
   name: string;
   base: string;
-  assetClass: "crypto" | "gold";
+  assetClass: AssetClass;
   rank: number | null;
   marketCapUsd: number | null;
   priceUsd: number | null;
@@ -25,7 +25,7 @@ export interface AssetsResponse {
   note: string;
 }
 
-/** The live asset universe (Binance USDT spot pairs + gold), cached for an hour. */
+/** The live asset universe (Binance USDT spot pairs + spot gold and silver), cached for an hour. */
 export const useAssets = () => useQuery({ queryKey: ["assets"], queryFn: () => api.get<AssetsResponse>("/api/assets?limit=1000"), staleTime: 60 * 60_000, refetchInterval: 60 * 60_000 });
 
 export function useAssetIndex(): Map<string, AssetInfo> {

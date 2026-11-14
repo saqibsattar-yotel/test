@@ -1,7 +1,8 @@
-# Aurum Terminal — Crypto & Gold Trading Intelligence
+# Aurum Terminal — Crypto, Gold & Silver Trading Intelligence
 
-A research and decision-support terminal for **XAU/USD and every cryptocurrency with a
-Binance USDT spot market (≈500 coins, from BTC and ETH to POL, ENA, SUI, HYPE…)**: live
+A research and decision-support terminal for **spot gold (XAU/USD), spot silver (XAG/USD) and
+every cryptocurrency with a Binance USDT spot market (≈500 coins, from BTC and ETH to POL, ENA,
+SUI, HYPE…)**: live
 market data with provenance, multi-timeframe technical analysis,
 transparent regime scoring, structured AI trade plans (entry · stop · TP1/2/3 · quality
 score · NO TRADE), deterministic position sizing with real contract specifications, an
@@ -28,12 +29,27 @@ npm run dev                 # server on :8787, web on :5173 (proxied)
 
 Open http://localhost:5173. First run shows a short guided setup.
 
-First start on a new computer: crypto is live within seconds. Spot-gold and dollar-index history is
-downloaded once in the background from a public archive (usually under a minute, several minutes when
-the archive is slow). The app stays fully usable meanwhile, shows a "First start on this computer"
-notice with progress, and fills the gold panels in as each part arrives. The download is cached under
-`data/cache/`, so every later start is instant. With a free `TWELVEDATA_API_KEY` gold quotes and charts
-come from Twelve Data and do not wait for the archive at all.
+First start on a new computer: crypto is live within seconds. Spot gold and silver history is
+downloaded once in the background from a public archive (usually well under a minute). The app stays
+fully usable meanwhile, shows a "First start on this computer" notice with progress until both metals
+are ready, and fills the gold and silver panels in as each part arrives (prices and intraday charts
+first, gold before silver). The dollar-index history follows quietly afterwards; until it is there the
+dollar index shows its live value and uses ECB reference rates for history. Everything is cached under
+`data/cache/`, so later starts are instant.
+
+An installation that was set up before silver was added downloads the silver history once on its next
+start, and gets XAG/USD next to XAU/USD in the followed assets and the watchlist (once; removing it
+afterwards sticks).
+
+The archive limits how much one internet connection may download. If it refuses or drops downloads,
+the app does not hammer it: a failed file is retried after 30 seconds, then 1, 2, 4, 8 and at most
+10 minutes; a burst of failures pauses all downloads for a while and halves the pace afterwards. The
+terminal shows a line or two about it, not one per file. Gold or silver history that still has gaps
+after a few minutes is shown flagged, and trade setups for that metal are withheld until it is
+complete. If none of it could be downloaded at all, the metal's charts and analysis say "unavailable"
+with the reason (never a demo chart), its live price keeps working, and everything fills in by itself
+when the archive answers. With a `TWELVEDATA_API_KEY` gold and silver quotes and charts come from Twelve Data first
+(when the key's plan covers the symbol) and do not wait for the archive.
 
 Development notes:
 
@@ -63,11 +79,16 @@ npm run typecheck
 
 The server builds a live registry from Binance's tradable USDT spot pairs (fiat, stablecoin
 and leveraged products excluded) enriched with CoinGecko names, ranks and market caps, plus
-XAU/USD. Any asset can be searched from the command palette (`⌘K`) or the asset pickers on
-the Crypto, Technical, Setups, Journal, Risk, Alerts, Watchlist and Settings screens; the
-server validates ids against the registry (unknown ids return 404, never demo data) and
-streams quotes for whatever is opened. A curated core set (BTC, ETH, SOL, BNB, XRP, ADA,
-DOGE, AVAX, LINK, XAU) carries hand-tuned metadata and anchors the regime model.
+spot gold (XAU/USD) and spot silver (XAG/USD). Any asset can be searched from the command
+palette (`⌘K`) or the asset pickers on the Crypto, Technical, Setups, Journal, Risk, Alerts,
+Watchlist and Settings screens; the server validates ids against the registry (unknown ids
+return 404, never demo data) and streams quotes for whatever is opened. A curated core set
+(BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, LINK, XAU, XAG) carries hand-tuned metadata and
+anchors the regime models.
+
+Gold and silver are treated alike everywhere: each has its own analysis page, posture score,
+price verification, contract specifications and journal class. They are the genuine spot
+metals, never a token, an ETF or a futures contract standing in for them.
 
 ## What runs without any key
 
@@ -78,7 +99,8 @@ DOGE, AVAX, LINK, XAU) carries hand-tuned metadata and anchors the regime model.
 | Funding, open interest, long/short, liquidations | Binance USDⓈ-M public endpoints and force-order stream |
 | Market cap, BTC dominance, top coins | CoinGecko free API |
 | Fear & Greed | alternative.me |
-| Spot gold (XAU/USD) quotes & history | **Dukascopy historical archive** (bid candles, minute → daily) + **Swissquote public BBO** live sampling; cross-checked against gold-api.com on the Gold page. PAXG is listed separately as tokenised gold and is never used for XAU/USD; COMEX GC/MGC are specs-only (no keyless live feed) |
+| Spot gold (XAU/USD) and spot silver (XAG/USD) quotes & history | **Dukascopy historical archive** (bid candles, minute → daily) + **Swissquote public BBO** live sampling; cross-checked against gold-api.com on the Gold and Silver pages. PAXG is listed separately as tokenised gold and is never used for XAU/USD, and nothing stands in for XAG/USD; COMEX GC/MGC and SI/SIL are specs-only (no keyless live feed) |
+| Gold/silver ratio | The two spot quotes divided (XAU/USD ÷ XAG/USD), with its place in the last year of daily closes from the same archive |
 | Treasury yields, real yields | home.treasury.gov daily XML feeds |
 | US Dollar Index | **ICE formula on the six constituent FX rates** — Swissquote live quotes now, Dukascopy FX archives for history (labelled "computed, not the ICE print"); ECB-fixing version kept as a daily cross-check |
 | Economic calendar | Fed / BLS / BEA published schedules (`data/official-schedule.json`) + Forex Factory weekly feed for forecast/previous |
@@ -89,24 +111,26 @@ DOGE, AVAX, LINK, XAU) carries hand-tuned metadata and anchors the regime model.
 
 | Variable | Unlocks |
 |---|---|
-| `TWELVEDATA_API_KEY` | Twelve Data becomes the primary XAU/USD source and an extra verification input (Dukascopy + Swissquote stay as fallback). Free key: register at [twelvedata.com/register](https://twelvedata.com/register), then copy it from the API keys page |
+| `TWELVEDATA_API_KEY` | Twelve Data becomes the primary XAU/USD and XAG/USD source and an extra verification input (Dukascopy + Swissquote stay as fallback, also for a symbol the key's plan does not include). Free key: register at [twelvedata.com/register](https://twelvedata.com/register), then copy it from the API keys page |
 | `FRED_API_KEY` | FRED DGS10 / DGS2 / DFII10 and the broad dollar index. Free key: sign in at [fredaccount.stlouisfed.org/apikeys](https://fredaccount.stlouisfed.org/apikeys) and request one |
 | `ANTHROPIC_API_KEY` (+ `ANTHROPIC_MODEL`, default `claude-opus-5-5`) | Claude-written narratives from the computed fact sheet, with numeric grounding checks |
 | `CALENDAR_FF_FEED=false` | Disable the Forex Factory feed |
 | `ALLOWED_ORIGINS` | Extra browser origins allowed to call the API, comma-separated (for a LAN device, custom hostname or reverse proxy). Pages served from this machine are always allowed; every other website is refused |
-| `DEMO_MODE=auto\|force\|off` | `auto` falls back to labelled demo data only when all providers fail |
+| `DEMO_MODE=auto\|force\|off` | `auto` falls back to labelled demo data for a coin only when all its providers fail; gold and silver are never replaced by demo data in this mode (missing history is reported as unavailable). `force` shows demo data for everything; `off` never does |
 
 Keys stay on the server; the browser only ever sees `/api/features` flags.
 
 ## Sections
 
 Overview · Crypto Analysis · Gold Analysis (spot vs futures vs tokenised, price verification,
-dollar index) · AI Trade Setups (live plans with indicator contributions, MTF confirmation,
-evidence sufficiency and data status; Monitoring and History tabs that follow entry, stop and
-TP1–TP3 against live prices — levels only, no orders) · Technical Analysis · Market
-Intelligence (crypto, gold & macro, calendar, news) · Risk Calculator (spot, perps, XAU CFD
-lots, GC/MGC, CME BTC/MBT; discipline gate; circuit breaker) · Trade Journal · Performance
-Analytics · Backtesting (walk-forward, fees/slippage, in-sample vs out-of-sample) · Settings.
+dollar index) · Silver Analysis (the same workspace on spot XAG/USD: spot vs futures, price
+verification, the gold/silver ratio, dollar index) · AI Trade Setups (live plans with indicator
+contributions, MTF confirmation, evidence sufficiency and data status; Monitoring and History
+tabs that follow entry, stop and TP1–TP3 against live prices — levels only, no orders) ·
+Technical Analysis · Market Intelligence (crypto, gold, silver & macro, calendar, news) · Risk
+Calculator (spot, perps, XAU and XAG CFD lots, COMEX GC/MGC and SI/SIL, CME BTC/MBT; discipline
+gate; circuit breaker) · Trade Journal · Performance Analytics (crypto, gold and silver
+side by side) · Backtesting (walk-forward, fees/slippage, in-sample vs out-of-sample) · Settings.
 
 Keyboard: `g` then a letter jumps between sections, `⌘K` opens the command palette, `t`
 toggles the theme, `a` opens alerts, `?` lists shortcuts.

@@ -5,13 +5,14 @@ import type { DataSource } from "@terminal/core";
 import { cls, fmtAge, fmtTime, qualityLabel } from "@/lib/format";
 import { useUi } from "@/lib/store";
 
-export type Tone = "neutral" | "bull" | "bear" | "gold" | "accent" | "warning" | "critical" | "muted";
+export type Tone = "neutral" | "bull" | "bear" | "gold" | "silver" | "accent" | "warning" | "critical" | "muted";
 
 const toneBadge: Record<Tone, string> = {
   neutral: "bg-surface-3 text-ink-2 border-line",
   bull: "bg-bull-soft text-bull border-transparent",
   bear: "bg-bear-soft text-bear border-transparent",
   gold: "bg-gold-soft text-gold border-transparent",
+  silver: "bg-silver-soft text-silver border-transparent",
   accent: "bg-accent-soft text-accent border-transparent",
   warning: "text-warn border-transparent",
   critical: "text-crit border-transparent",
@@ -27,7 +28,7 @@ export function Badge({ tone = "neutral", children, className, size = "md", titl
 }
 
 export function Dot({ tone = "neutral", pulse = false }: { tone?: Tone; pulse?: boolean }) {
-  const color = tone === "bull" ? "var(--bull)" : tone === "bear" ? "var(--bear)" : tone === "gold" ? "var(--gold)" : tone === "warning" ? "var(--warning)" : tone === "critical" ? "var(--critical)" : tone === "accent" ? "var(--accent)" : "var(--ink-3)";
+  const color = tone === "bull" ? "var(--bull)" : tone === "bear" ? "var(--bear)" : tone === "gold" ? "var(--gold)" : tone === "silver" ? "var(--silver)" : tone === "warning" ? "var(--warning)" : tone === "critical" ? "var(--critical)" : tone === "accent" ? "var(--accent)" : "var(--ink-3)";
   return <span aria-hidden className={cls("inline-block h-2 w-2 rounded-full", pulse && "animate-pulse")} style={{ background: color }} />;
 }
 
@@ -335,7 +336,7 @@ export function Stat({ label, value, delta, deltaTone, hint, sub, children, clas
         <span className={cls("font-semibold text-ink-1 truncate max-w-full", big ? "text-2xl" : "text-lg")} title={typeof value === "string" ? value : undefined}>
           {value}
         </span>
-        {delta !== undefined && <span className={cls("text-xs font-medium tabular", deltaTone === "bull" ? "text-bull" : deltaTone === "bear" ? "text-bear" : deltaTone === "gold" ? "text-gold" : "text-ink-3")}>{delta}</span>}
+        {delta !== undefined && <span className={cls("text-xs font-medium tabular", deltaTone === "bull" ? "text-bull" : deltaTone === "bear" ? "text-bear" : deltaTone === "gold" ? "text-gold" : deltaTone === "silver" ? "text-silver" : "text-ink-3")}>{delta}</span>}
       </div>
       {sub && <div className="text-xs text-ink-3 truncate">{sub}</div>}
       {children && <div className="flex items-center justify-end pt-0.5">{children}</div>}
@@ -346,7 +347,7 @@ export function Stat({ label, value, delta, deltaTone, hint, sub, children, clas
 /** Meter: fill carries severity; track is a lighter step of the same ramp. */
 export function Meter({ value, max = 100, tone = "accent", label, className, thresholds }: { value: number | null; max?: number; tone?: Tone; label?: string; className?: string; thresholds?: { at: number; label: string }[] }) {
   const pct = value === null ? 0 : Math.max(0, Math.min(100, (value / max) * 100));
-  const color = tone === "bull" ? "var(--bull)" : tone === "bear" ? "var(--bear)" : tone === "gold" ? "var(--gold)" : tone === "warning" ? "var(--warning)" : "var(--accent)";
+  const color = tone === "bull" ? "var(--bull)" : tone === "bear" ? "var(--bear)" : tone === "gold" ? "var(--gold)" : tone === "silver" ? "var(--silver)" : tone === "warning" ? "var(--warning)" : "var(--accent)";
   return (
     <div className={cls("w-full", className)} role="meter" aria-valuenow={value ?? undefined} aria-valuemin={0} aria-valuemax={max} aria-label={label}>
       <div className="relative h-2.5 w-full rounded-full overflow-hidden" style={{ background: `color-mix(in oklab, ${color} 18%, var(--surface-3))` }}>
@@ -368,7 +369,7 @@ export function Sparkline({ values, width = 96, height = 28, tone = "accent", cl
   const pts = clean.map((v, i) => [(i / (clean.length - 1)) * (width - 2) + 1, height - 2 - ((v - min) / range) * (height - 4)] as const);
   const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
   const resolved = tone === "auto" ? (clean[clean.length - 1] >= (baseline ?? clean[0]) ? "bull" : "bear") : tone;
-  const color = resolved === "bull" ? "var(--bull)" : resolved === "bear" ? "var(--bear)" : resolved === "gold" ? "var(--gold)" : resolved === "muted" ? "var(--ink-3)" : "var(--accent)";
+  const color = resolved === "bull" ? "var(--bull)" : resolved === "bear" ? "var(--bear)" : resolved === "gold" ? "var(--gold)" : resolved === "silver" ? "var(--silver)" : resolved === "muted" ? "var(--ink-3)" : "var(--accent)";
   const last = pts[pts.length - 1];
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className={className} aria-hidden>

@@ -6,6 +6,7 @@ import { Badge, Dot, IconButton, Kbd, Modal, Toasts, Tooltip } from "@/component
 import { useUi, useUiNoQuotes } from "@/lib/store";
 import { cls, fmtPct, fmtPrice, fmtTime, toneForChange } from "@/lib/format";
 import { useAlerts, useSettings } from "@/lib/queries";
+import { assetTextClass, isMetalAsset, workspacePath } from "@/lib/metals";
 import { NAV } from "./nav";
 import { CommandPalette } from "./CommandPalette";
 import { AlertsDrawer } from "./AlertsDrawer";
@@ -83,7 +84,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const clock = useClock(ui.timezone);
   const unread = alerts.data?.triggered.filter((t) => !t.read).length ?? ui.unreadAlerts;
   const current = NAV.find((n) => n.to === loc.pathname) ?? NAV[0];
-  const followed = useMemo<AssetId[]>(() => settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"], [settings.data]);
+  const followed = useMemo<AssetId[]>(() => settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD", "XAGUSD"], [settings.data]);
+  const mobileNav = NAV.filter((n) => n.mobile);
   useEffect(() => {
     document.title = `${current.label} · Aurum Terminal`;
   }, [current]);
@@ -99,7 +101,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           {!collapsed && (
             <div className="leading-tight">
               <div className="text-sm font-semibold tracking-tight text-ink-1">Aurum Terminal</div>
-              <div className="text-[10.5px] text-ink-3">Crypto & Gold research</div>
+              <div className="text-[10.5px] text-ink-3">Crypto, gold & silver research</div>
             </div>
           )}
         </div>
@@ -108,7 +110,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <NavLink key={n.to} to={n.to} end={n.to === "/"} className={({ isActive }) => cls("flex items-center gap-3 rounded-lg px-2.5 h-9 text-sm transition-colors", isActive ? "bg-surface-3 text-ink-1 font-medium" : "text-ink-2 hover:bg-surface-2 hover:text-ink-1", collapsed && "justify-center px-0")} title={collapsed ? n.label : undefined}>
               <n.icon className="h-4 w-4 shrink-0" />
               {!collapsed && <span className="truncate">{n.label}</span>}
-              {!collapsed && <span className="ml-auto text-[10px] text-ink-3 hidden lg:inline">g {n.key}</span>}
+              {!collapsed && <span className="ml-auto pl-1 shrink-0 whitespace-nowrap text-[10px] text-ink-3 hidden lg:inline">g {n.key}</span>}
             </NavLink>
           ))}
         </nav>
@@ -165,8 +167,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="flex-1 w-full max-w-[1680px] mx-auto px-3 sm:px-4 lg:px-6 py-4 lg:py-6 pb-24 md:pb-8 min-w-0">{children}</main>
 
         <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-line bg-surface-1/95 backdrop-blur safe-bottom">
-          <div className="grid grid-cols-5">
-            {NAV.filter((n) => n.mobile).map((n) => (
+          <div className="grid" style={{ gridTemplateColumns: `repeat(${mobileNav.length + 1}, minmax(0, 1fr))` }}>
+            {mobileNav.map((n) => (
               <NavLink key={n.to} to={n.to} end={n.to === "/"} className={({ isActive }) => cls("flex flex-col items-center justify-center gap-0.5 h-14 text-[10.5px]", isActive ? "text-accent" : "text-ink-3")}>
                 <n.icon className="h-5 w-5" />
                 {n.short}
@@ -244,16 +246,13 @@ function TickerStrip({ assets }: { assets: AssetId[] }) {
           <button
             key={a}
             onClick={() => {
-              if (a === "XAUUSD") navigate("/gold");
-              else {
-                setCrypto(a);
-                navigate("/crypto");
-              }
+              if (!isMetalAsset(a)) setCrypto(a);
+              navigate(workspacePath(a));
               setSelected(a);
             }}
             className="flex items-center gap-2 h-9 rounded-lg px-2.5 hover:bg-surface-2 text-xs whitespace-nowrap"
           >
-            <span className={cls("font-semibold", a === "XAUUSD" ? "text-gold" : "text-ink-1")}>{assetBase(a)}</span>
+            <span className={cls("font-semibold", assetTextClass(a))}>{assetBase(a)}</span>
             <span className="tabular text-ink-1">{q ? fmtPrice(q.price, a) : "—"}</span>
             <span className={cls("tabular", tone === "bull" ? "text-bull" : tone === "bear" ? "text-bear" : "text-ink-3")}>{q ? fmtPct(q.changePct24h) : ""}</span>
             {q?.source.quality === "demo" && (

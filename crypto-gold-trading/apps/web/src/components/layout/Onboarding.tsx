@@ -15,7 +15,7 @@ export function Onboarding() {
   const features = useFeatures();
   const ui = useUi();
   const [step, setStep] = useState(0);
-  const [assets, setAssets] = useState<AssetId[]>(["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"]);
+  const [assets, setAssets] = useState<AssetId[]>(["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD", "XAGUSD"]);
   const [tfs, setTfs] = useState<Timeframe[]>(["15m", "1h", "4h", "1d"]);
   const [balance, setBalance] = useState("10000");
   const [currency, setCurrency] = useState("USD");
@@ -57,7 +57,7 @@ export function Onboarding() {
       </div>
       {step === 0 && (
         <div className="space-y-4 text-sm text-ink-2">
-          <p className="text-ink-1 text-base font-medium">A research and decision-support terminal for crypto and gold — not a signal service.</p>
+          <p className="text-ink-1 text-base font-medium">A research and decision-support terminal for crypto, gold and silver — not a signal service.</p>
           <ul className="list-disc pl-5 space-y-1.5">
             <li>Every number is computed from the data sources shown next to it. Stale, proxy and demo data are always labelled.</li>
             <li>Trade setups are structured plans with entry, stop, targets and an honest quality score. The engine will say NO TRADE often.</li>
@@ -67,9 +67,9 @@ export function Onboarding() {
           <div className="card p-3 text-xs space-y-1.5">
             <p className="font-medium text-ink-1">Data sources detected</p>
             <p>
-              Gold spot:{" "}
+              Gold and silver spot:{" "}
               <Badge tone="bull" size="sm">
-                {features.data?.goldSpot.provider?.startsWith("twelvedata") ? "Twelve Data + Dukascopy + Swissquote (spot XAU/USD)" : "Dukascopy archive + Swissquote live (spot XAU/USD)"}
+                {features.data?.goldSpot.provider?.startsWith("twelvedata") ? "Twelve Data + Dukascopy + Swissquote (spot XAU/USD and XAG/USD)" : "Dukascopy archive + Swissquote live (spot XAU/USD and XAG/USD)"}
               </Badge>
             </p>
             <p>

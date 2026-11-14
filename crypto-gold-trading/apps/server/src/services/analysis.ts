@@ -2,11 +2,11 @@
  * Analysis service: wires verified market data into the deterministic core engines.
  * Nothing here invents a number — every figure traces back to a provider payload.
  */
-import type { AssetId, Candle, DataSource, Level, Timeframe, TradeSetup } from "@terminal/core";
+import type { AssetId, Candle, DataSource, Level, Metal, Timeframe, TradeSetup } from "@terminal/core";
 import {
   CRYPTO_ASSETS,
   analyzeCryptoRegime,
-  analyzeGoldRegime,
+  analyzeMetalRegime,
   analyzeMultiTimeframe,
   computeIndicatorSnapshot,
   dominanceProxyFromCloses,
@@ -19,8 +19,10 @@ import {
   liquidityZones,
   realizedVolatility,
   validateCandles,
+  isMetalClass,
+  metalInfo,
   type CryptoRegimeResult,
-  type GoldRegimeResult,
+  type MetalRegimeResult,
   type MtfResult,
   type SetupEngineOutput,
   type IndicatorSnapshot,
@@ -59,14 +61,6 @@ export async function loadCandles(assetId: AssetId, tfs: Timeframe[]): Promise<A
   return { byTf, sources, warnings };
 }
 
-export interface RegimeBundle {
-  crypto: CryptoRegimeResult | null;
-  cryptoError?: string;
-  gold: GoldRegimeResult | null;
-  goldError?: string;
-  sources: DataSource[];
-}
-
 export async function getCryptoRegime(): Promise<{ result: CryptoRegimeResult; sources: DataSource[]; notes: string[] }> {
   const res = await cache.getOrLoad("regime:crypto", 10 * 60_000, async () => {
     const notes: string[] = [];
@@ -98,16 +92,29 @@ export async function getCryptoRegime(): Promise<{ result: CryptoRegimeResult; s
   return res.value;
 }
 
-export async function getGoldRegime(): Promise<{ result: GoldRegimeResult; sources: DataSource[]; notes: string[] }> {
-  const res = await cache.getOrLoad("regime:gold", 10 * 60_000, async () => {
+export interface MetalRegimeResponse {
+  result: MetalRegimeResult;
+  sources: DataSource[];
+  notes: string[];
+  provisional?: boolean;
+}
+
+/** The macro-technical posture of gold or silver: the same composite, each on its own daily prices. */
+export async function getMetalRegime(metal: Metal): Promise<MetalRegimeResponse> {
+  const { id, title } = metalInfo(metal);
+  const cacheKey = `regime:${metal}`;
+  const res = await cache.getOrLoad(cacheKey, 10 * 60_000, async () => {
     const notes: string[] = [];
-    const gold = await market.getCandles("XAUUSD", "1d", 450);
+    const daily = await market.getCandles(id, "1d", 450);
     const macro = await market.getMacro();
     notes.push(...macro.errors);
-    if (gold.source.proxy) notes.push(`Gold history is a labelled proxy (${gold.source.label}) — posture is indicative only.`);
-    if (gold.source.quality === "demo") notes.push("Gold history is DEMO data — posture is illustrative only.");
-    const result = analyzeGoldRegime({
-      goldDaily: gold.candles,
+    if (daily.source.incomplete) notes.push(`Part of the ${metal} history could not be downloaded yet, so this posture is provisional.`);
+    if (macro.dxyWarming) notes.push("The dollar leg uses ECB reference-rate history until the close-based dollar-index history has been downloaded.");
+    if (daily.source.proxy) notes.push(`${title} history is a labelled proxy (${daily.source.label}) — posture is indicative only.`);
+    if (daily.source.quality === "demo") notes.push(`${title} history is DEMO data — posture is illustrative only.`);
+    const result = analyzeMetalRegime({
+      metal,
+      daily: daily.candles,
       dxyDaily: macro.dxy?.points.map((p) => p.value),
       tenYearYield: macro.dgs10?.points.map((p) => p.value),
       realYield10y: macro.real10?.points.map((p) => p.value),
@@ -115,12 +122,17 @@ export async function getGoldRegime(): Promise<{ result: GoldRegimeResult; sourc
       dxyLabel: macro.dxy?.id === "DXY_SYNTH" ? "synthetic DXY" : macro.dxy?.label,
       yieldLabel: "10y",
     });
-    const sources: DataSource[] = [gold.source];
+    const sources: DataSource[] = [daily.source];
     for (const s of [macro.dxy, macro.dgs10, macro.real10]) if (s) sources.push(s.source);
-    return { result, sources, notes };
+    return { result, sources, notes, provisional: !!daily.source.incomplete || macro.dxyWarming } satisfies MetalRegimeResponse;
   });
+  // A posture computed while data was still arriving is recomputed soon, not kept for ten minutes.
+  if (res.value.provisional && !res.fromCache) cache.set(cacheKey, res.value, 45_000);
   return res.value;
 }
+
+export const getGoldRegime = () => getMetalRegime("gold");
+export const getSilverRegime = () => getMetalRegime("silver");
 
 export interface TimeframeDetail {
   timeframe: Timeframe;
@@ -180,7 +192,7 @@ export async function analyzeAsset(assetId: AssetId, tfs: Timeframe[] = DEFAULT_
       mtf,
       details: details.filter((d) => tfs.includes(d.timeframe) || d.timeframe === "1d"),
       periodLevels: pl,
-      sessions: meta.assetClass === "gold" ? sessions : null,
+      sessions: isMetalClass(meta.assetClass) ? sessions : null,
       liquidity: liq.slice(0, 6),
       volatility: { atrPct4h: ind4?.atrPct ?? null, realizedVol30dPct: rv !== null && Number.isFinite(rv) ? rv : null, atrPct1d: ind1d?.atrPct ?? null },
       warnings,
@@ -210,14 +222,17 @@ export async function getSetup(assetId: AssetId, timeframe: Timeframe, sizing?: 
       if (meta.assetClass === "crypto") {
         const r = (await getCryptoRegime()).result;
         regime = { label: "Crypto regime", zone: r.zone, bias: r.zone === "RISK_ON" ? "bullish" : r.zone === "RISK_OFF" ? "bearish" : r.zone === "UNKNOWN" ? "unknown" : "neutral" };
-      } else {
-        const r = (await getGoldRegime()).result;
-        regime = { label: "Gold posture", zone: r.zone, bias: r.zone === "CONSTRUCTIVE" ? "bullish" : r.zone === "DEFENSIVE" ? "bearish" : r.zone === "UNKNOWN" ? "unknown" : "neutral" };
+      } else if (isMetalClass(meta.assetClass)) {
+        const r = (await getMetalRegime(meta.assetClass)).result;
+        regime = { label: `${metalInfo(meta.assetClass).title} posture`, zone: r.zone, bias: r.zone === "CONSTRUCTIVE" ? "bullish" : r.zone === "DEFENSIVE" ? "bearish" : r.zone === "UNKNOWN" ? "unknown" : "neutral" };
       }
     } catch (err) {
       log.warn(`regime unavailable for setup: ${(err as Error).message}`);
     }
-    const out = generateSetups({ assetId, timeframe, candles: byTf, mtf, regime, now, dataSource: sources[timeframe]!, sizing: sizing ? { ...sizing, prefer: meta.assetClass === "gold" ? "cfd" : "spot" } : undefined });
+    // History with gaps (some archive files still missing) must not produce a trade plan.
+    const gappy = tfs.filter((t) => sources[t]?.incomplete);
+    const dataBlockers = gappy.length ? [`Price history on ${gappy.join(", ")} still has gaps (the archive is refusing some files; they are retried automatically). No setup is generated on incomplete data.`] : undefined;
+    const out = generateSetups({ assetId, timeframe, candles: byTf, mtf, regime, now, dataSource: sources[timeframe]!, sizing: sizing ? { ...sizing, prefer: isMetalClass(meta.assetClass) ? "cfd" : "spot" } : undefined, dataBlockers });
     return { ...out, mtfSummary: mtf.summary, sources: Object.values(sources) as DataSource[], warnings } satisfies SetupResponse;
   });
   return res.value;

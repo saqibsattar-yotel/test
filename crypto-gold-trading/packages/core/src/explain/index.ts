@@ -6,7 +6,7 @@
 import type { TradeSetup } from "../types";
 import type { MtfResult } from "../mtf";
 import type { CryptoRegimeResult } from "../regime/crypto";
-import type { GoldRegimeResult } from "../regime/gold";
+import type { MetalRegimeResult } from "../regime/gold";
 
 export function explainSetup(setup: TradeSetup, mtf?: MtfResult | null): string[] {
   const out: string[] = [];
@@ -38,15 +38,19 @@ export function explainCryptoRegime(r: CryptoRegimeResult): string[] {
   return out;
 }
 
-export function explainGoldRegime(r: GoldRegimeResult): string[] {
-  if (r.score === null) return [`Gold posture: UNKNOWN — ${r.guidance}.`];
+/** Works for either metal: the result says which one it describes. */
+export function explainMetalRegime(r: MetalRegimeResult): string[] {
+  const name = r.metal === "silver" ? "Silver" : "Gold";
+  if (r.score === null) return [`${name} posture: UNKNOWN — ${r.guidance}.`];
   const avail = r.components.filter((c) => c.dataAvailable);
-  const out = [`Gold macro-technical posture ${r.zone} (${r.score}/100) — ${r.guidance}.`];
+  const out = [`${name} macro-technical posture ${r.zone} (${r.score}/100) — ${r.guidance}.`];
   for (const c of avail) out.push(`${c.label}: ${c.signal}.`);
   const missing = r.components.filter((c) => !c.dataAvailable);
   if (missing.length) out.push(`Unavailable inputs: ${missing.map((m) => `${m.label} (${m.signal})`).join("; ")}.`);
   return out;
 }
+
+export const explainGoldRegime = explainMetalRegime;
 
 export function explainMtf(m: MtfResult): string[] {
   const out = [...m.summary];

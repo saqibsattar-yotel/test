@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BookOpen, Download, Plus, Trash2 } from "lucide-react";
-import { TIMEFRAMES, type JournalTrade } from "@terminal/core";
+import { TIMEFRAMES, contractSizeFor, type JournalTrade } from "@terminal/core";
 import { Badge, Button, Card, Drawer, EmptyState, Field, Input, Modal, PageHeader, Select, SkeletonBlock, Stat, Toggle } from "@/components/ui";
 import { TradeForm } from "@/components/journal/TradeForm";
 import { useJournal, useJournalMutations, useJournalStats, useSettings } from "@/lib/queries";
 import { useUi } from "@/lib/store";
 import { cls, fmtDateTime, fmtMoney, fmtNum, fmtPrice, fmtR, setupTypeLabel } from "@/lib/format";
 import type { JournalFilterParams } from "@/lib/api";
+import { classTextClass } from "@/lib/metals";
 
 export default function Journal() {
   const [params, setParams] = useSearchParams();
@@ -56,7 +57,7 @@ export default function Journal() {
       <Card padded={false}>
         <div className="p-3 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 items-end">
           <Field label="Asset"><Select value={filter.asset ?? ""} onChange={(e) => setFilter({ ...filter, asset: e.target.value || undefined })}><option value="">All</option>{Array.from(new Set([...(trades.data?.trades.map((t) => t.assetId) ?? []), ...(filter.asset ? [filter.asset] : [])])).sort().map((a) => <option key={a} value={a}>{a.replace(/USD$/, "/USD")}</option>)}</Select></Field>
-          <Field label="Class"><Select value={filter.class ?? ""} onChange={(e) => setFilter({ ...filter, class: e.target.value || undefined })}><option value="">All</option><option value="crypto">Crypto</option><option value="gold">Gold</option></Select></Field>
+          <Field label="Class"><Select value={filter.class ?? ""} onChange={(e) => setFilter({ ...filter, class: e.target.value || undefined })}><option value="">All</option><option value="crypto">Crypto</option><option value="gold">Gold</option><option value="silver">Silver</option></Select></Field>
           <Field label="Timeframe"><Select value={filter.tf ?? ""} onChange={(e) => setFilter({ ...filter, tf: e.target.value || undefined })}><option value="">All</option>{TIMEFRAMES.map((t) => <option key={t}>{t}</option>)}</Select></Field>
           <Field label="Setup"><Select value={filter.setup ?? ""} onChange={(e) => setFilter({ ...filter, setup: e.target.value || undefined })}><option value="">All</option>{["trend_pullback", "breakout", "breakdown", "range_fade", "mean_reversion", "liquidity_sweep_reversal", "other"].map((t) => <option key={t} value={t}>{setupTypeLabel(t)}</option>)}</Select></Field>
           <Field label="Status"><Select value={filter.status ?? "all"} onChange={(e) => setFilter({ ...filter, status: e.target.value })}><option value="all">All</option><option value="open">Open</option><option value="closed">Closed</option></Select></Field>
@@ -78,7 +79,7 @@ export default function Journal() {
                   {trades.data.trades.map((t) => (
                     <tr key={t.id} className="border-t border-line hover:bg-surface-2 cursor-pointer" onClick={() => setViewing(t)}>
                       <td className="px-4 py-2 tabular text-ink-2 whitespace-nowrap">{fmtDateTime(t.openedAt, tz)}</td>
-                      <td className="px-2 py-2"><span className={cls("font-medium", t.assetClass === "gold" ? "text-gold" : "text-ink-1")}>{t.symbol}</span> <Badge tone={t.direction === "LONG" ? "bull" : "bear"} size="sm">{t.direction}</Badge>{t.isTestData && <Badge tone="warning" size="sm" className="ml-1">TEST</Badge>}{t.source === "paper" && <Badge tone="muted" size="sm" className="ml-1">paper</Badge>}</td>
+                      <td className="px-2 py-2"><span className={cls("font-medium", classTextClass(t.assetClass))}>{t.symbol}</span> <Badge tone={t.direction === "LONG" ? "bull" : "bear"} size="sm">{t.direction}</Badge>{t.isTestData && <Badge tone="warning" size="sm" className="ml-1">TEST</Badge>}{t.source === "paper" && <Badge tone="muted" size="sm" className="ml-1">paper</Badge>}</td>
                       <td className="px-2 py-2 text-ink-2">{setupTypeLabel(t.setupType)} · {t.timeframe}</td>
                       <td className="px-2 py-2 tabular text-right">{fmtPrice(t.entry, t.assetId)}</td>
                       <td className="px-2 py-2 tabular text-right text-bear">{fmtPrice(t.stop, t.assetId)}</td>
@@ -97,7 +98,7 @@ export default function Journal() {
             <ul className="lg:hidden divide-y divide-line">
               {trades.data.trades.map((t) => (
                 <li key={t.id} className="p-3 space-y-1" onClick={() => setViewing(t)}>
-                  <div className="flex items-center gap-2"><span className={cls("font-medium text-sm", t.assetClass === "gold" ? "text-gold" : "text-ink-1")}>{t.symbol}</span><Badge tone={t.direction === "LONG" ? "bull" : "bear"} size="sm">{t.direction}</Badge><span className="text-xs text-ink-3">{setupTypeLabel(t.setupType)} · {t.timeframe}</span>{t.isTestData && <Badge tone="warning" size="sm">TEST</Badge>}<span className={cls("ml-auto tabular text-sm font-medium", (t.realizedPnl ?? 0) > 0 ? "text-bull" : (t.realizedPnl ?? 0) < 0 ? "text-bear" : "text-ink-2")}>{t.realizedPnl !== null ? fmtMoney(t.realizedPnl, currency) : "open"}</span></div>
+                  <div className="flex items-center gap-2"><span className={cls("font-medium text-sm", classTextClass(t.assetClass))}>{t.symbol}</span><Badge tone={t.direction === "LONG" ? "bull" : "bear"} size="sm">{t.direction}</Badge><span className="text-xs text-ink-3">{setupTypeLabel(t.setupType)} · {t.timeframe}</span>{t.isTestData && <Badge tone="warning" size="sm">TEST</Badge>}<span className={cls("ml-auto tabular text-sm font-medium", (t.realizedPnl ?? 0) > 0 ? "text-bull" : (t.realizedPnl ?? 0) < 0 ? "text-bear" : "text-ink-2")}>{t.realizedPnl !== null ? fmtMoney(t.realizedPnl, currency) : "open"}</span></div>
                   <div className="text-xs text-ink-2 tabular">E {fmtPrice(t.entry, t.assetId)} · SL {fmtPrice(t.stop, t.assetId)} · TP {t.takeProfit ? fmtPrice(t.takeProfit, t.assetId) : "—"} · {t.quantity} {t.quantityUnit}</div>
                   <div className="flex items-center justify-between text-[11px] text-ink-3"><span>{fmtDateTime(t.openedAt, tz)}</span>{t.status === "open" && <Button size="sm" onClick={(e) => { e.stopPropagation(); setClosing(t); }}>Close</Button>}</div>
                 </li>
@@ -135,7 +136,7 @@ function CloseModal({ trade, onClose, currency }: { trade: JournalTrade | null; 
   }, [trade, quotes]);
   if (!trade) return null;
   const e = parseFloat(exit);
-  const contractSize = trade.assetId === "XAUUSD" && trade.quantityUnit === "lots" ? 100 : 1;
+  const contractSize = contractSizeFor(trade.assetId, trade.quantityUnit);
   const derived = Number.isFinite(e) ? (trade.direction === "LONG" ? e - trade.entry : trade.entry - e) * trade.quantity * contractSize : null;
   const r = Number.isFinite(e) ? (trade.direction === "LONG" ? e - trade.entry : trade.entry - e) / Math.abs(trade.entry - trade.stop) : null;
   return (

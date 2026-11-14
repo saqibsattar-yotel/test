@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { assetBase, TIMEFRAMES, type AssetId, type Level, type Timeframe } from "@terminal/core";
+import { assetBase, isMetalAsset, TIMEFRAMES, type AssetId, type Level, type Timeframe } from "@terminal/core";
 import { AssetPicker } from "@/components/ui/AssetPicker";
 import { useAssetLabel } from "@/lib/assets";
 import { Badge, Card, DataNotice, Disclaimer, ErrorState, PageHeader, Segmented, SkeletonBlock, SourceBadge, Sparkline, Stat, Tooltip } from "@/components/ui";
@@ -17,7 +17,7 @@ export default function Crypto() {
   const settings = useSettings();
   const L = useAssetLabel();
   const meta = L(asset);
-  const quick = useMemo(() => Array.from(new Set<AssetId>([...(settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD"]).filter((a) => a !== "XAUUSD"), asset])).slice(-8), [settings.data, asset]);
+  const quick = useMemo(() => Array.from(new Set<AssetId>([...(settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD"]).filter((a) => !isMetalAsset(a)), asset])).slice(-8), [settings.data, asset]);
   const [tf, setTf] = useState<Timeframe>(ui.selectedTimeframe);
   const [overlays, setOverlays] = useState<OverlayToggles>(DEFAULT_OVERLAYS);
   const candles = useCandles(asset, tf, tf === "1w" ? 300 : 600);

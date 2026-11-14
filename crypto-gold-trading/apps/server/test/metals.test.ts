@@ -5,7 +5,7 @@ import lzma from "lzma";
 import type { Candle } from "@terminal/core";
 import { DECIMALS, aggregate, decodeCandles, decodeTicksToMinutes } from "../src/providers/dukascopy";
 import { dxyFromRates, isSpotMarketOpen } from "../src/providers/swissquote";
-import { aggregateWeekly, depthFor, mergeLive } from "../src/services/gold";
+import { aggregateWeekly, depthFor, mergeLive } from "../src/services/metals";
 
 function lzmaDecompress(buf: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -37,6 +37,27 @@ describe("Dukascopy archive decoding", () => {
       expect(c.close).toBeLessThan(6000);
     }
     // weekend gap: no candle on Saturday 3 Oct
+    expect(candles.some((c) => new Date(c.time).getUTCDay() === 6)).toBe(false);
+  });
+
+  it("decodes a real hourly archive month of silver (XAG/USD, October 2026) with the same scaling as gold", async () => {
+    const raw = await lzmaDecompress(fs.readFileSync(fileURLToPath(new URL("./fixtures/XAGUSD_2026-10_hour.bi5", import.meta.url))));
+    expect(raw.length % 24).toBe(0);
+    expect(raw.length / 24).toBe(744);
+    expect(DECIMALS.XAGUSD).toBe(1000);
+    const candles = decodeCandles(raw, Date.UTC(2026, 9, 1), DECIMALS.XAGUSD);
+    expect(candles.length).toBe(504); // the same traded hours as gold: both follow the spot-metals session
+    expect(candles[0].time).toBe(Date.UTC(2026, 9, 1));
+    expect(candles[0].close).toBeCloseTo(60.147, 3);
+    const last = candles[candles.length - 1];
+    expect(new Date(last.time).toISOString()).toBe("2026-10-30T20:00:00.000Z");
+    expect(last.close).toBeCloseTo(49.074, 3); // raw 49074: dollars per ounce to three decimals
+    for (const c of candles) {
+      expect(c.high).toBeGreaterThanOrEqual(Math.max(c.open, c.close));
+      expect(c.low).toBeLessThanOrEqual(Math.min(c.open, c.close));
+      expect(c.close).toBeGreaterThan(40);
+      expect(c.close).toBeLessThan(70);
+    }
     expect(candles.some((c) => new Date(c.time).getUTCDay() === 6)).toBe(false);
   });
 

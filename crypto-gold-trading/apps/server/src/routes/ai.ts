@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { explainCryptoRegime, explainGoldRegime, explainMtf, explainSetup, TIMEFRAMES, type AssetId, type Timeframe } from "@terminal/core";
+import { explainCryptoRegime, explainMetalRegime, explainMtf, explainSetup, TIMEFRAMES, type AssetId, type Timeframe } from "@terminal/core";
 import { assets } from "../services/assets";
 const isAssetId = (v: string) => assets.isSupported(v.toUpperCase());
 import { aiStatus, narrate } from "../services/ai";
-import { analyzeAsset, getCryptoRegime, getGoldRegime, getSetup } from "../services/analysis";
+import { analyzeAsset, getCryptoRegime, getMetalRegime, getSetup } from "../services/analysis";
 import { getSettings } from "../services/user";
 
 export async function aiRoutes(app: FastifyInstance) {
@@ -35,15 +35,17 @@ export async function aiRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/ai/regime", async (req, reply) => {
-    const body = z.object({ market: z.enum(["crypto", "gold"]) }).safeParse(req.body);
+    const body = z.object({ market: z.enum(["crypto", "gold", "silver"]) }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "invalid body" });
     if (body.data.market === "crypto") {
       const r = await getCryptoRegime();
       const narrative = await narrate({ kind: "regime", facts: { score: r.result.score, zone: r.result.zone, guidance: r.result.guidance, components: r.result.components.map((c) => ({ label: c.label, weight: c.weight, score: c.score, available: c.dataAvailable, signal: c.signal })), notes: r.notes }, fallback: explainCryptoRegime(r.result), factsAsOf: r.result.asOf, instruction: "Interpret the crypto market regime score for a trader: which components drive it, what it implies for exposure posture, and what would change the read. Stress that it is descriptive, not predictive.", effort: "low", maxTokens: 1000 });
       return { narrative };
     }
-    const r = await getGoldRegime();
-    const narrative = await narrate({ kind: "gold", facts: { score: r.result.score, zone: r.result.zone, guidance: r.result.guidance, components: r.result.components.map((c) => ({ label: c.label, weight: c.weight, score: c.score, available: c.dataAvailable, signal: c.signal })), notes: r.notes }, fallback: explainGoldRegime(r.result), factsAsOf: r.result.asOf, instruction: "Interpret gold's macro-technical posture: the trend, the dollar relationship as measured (do not assume an inverse relationship), real yields, momentum and volatility; explain how upcoming macro could shift it. Separate verified data from interpretation.", effort: "low", maxTokens: 1000 });
+    const metal = body.data.market;
+    const r = await getMetalRegime(metal);
+    const silverNote = metal === "silver" ? " Silver also follows gold and industrial demand; the fact sheet does not measure either, so mention them only as context without numbers." : "";
+    const narrative = await narrate({ kind: metal, facts: { metal, score: r.result.score, zone: r.result.zone, guidance: r.result.guidance, components: r.result.components.map((c) => ({ label: c.label, weight: c.weight, score: c.score, available: c.dataAvailable, signal: c.signal })), notes: r.notes }, fallback: explainMetalRegime(r.result), factsAsOf: r.result.asOf, instruction: `Interpret ${metal}'s macro-technical posture: the trend, the dollar relationship as measured (do not assume an inverse relationship), real yields, momentum and volatility; explain how upcoming macro could shift it.${silverNote} Separate verified data from interpretation.`, effort: "low", maxTokens: 1000 });
     return { narrative };
   });
 }

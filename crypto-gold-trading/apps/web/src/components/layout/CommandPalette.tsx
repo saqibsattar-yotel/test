@@ -6,6 +6,7 @@ import { Kbd } from "@/components/ui";
 import { searchAssets, useAssets } from "@/lib/assets";
 import { useUi } from "@/lib/store";
 import { cls } from "@/lib/format";
+import { METALS, isMetalAsset, workspacePath } from "@/lib/metals";
 import { NAV } from "./nav";
 
 interface Cmd {
@@ -34,15 +35,12 @@ export function CommandPalette() {
     const assets: Cmd[] = searchAssets(universe.data?.assets ?? [], q, { limit: q.trim() ? 12 : 8 }).map((a) => ({
       id: `a:${a.id}`,
       label: `${a.symbol} — ${a.name}${a.rank ? `  #${a.rank}` : ""}`,
-      hint: a.assetClass === "gold" ? "Gold workspace" : "Crypto workspace",
+      hint: isMetalAsset(a.id) ? `${METALS[a.id].title} workspace` : "Crypto workspace",
       group: "Assets",
       run: () => {
         setSelected(a.id);
-        if (a.assetClass === "gold") navigate("/gold");
-        else {
-          setCrypto(a.id);
-          navigate("/crypto");
-        }
+        if (!isMetalAsset(a.id)) setCrypto(a.id);
+        navigate(workspacePath(a.id));
       },
     }));
     const actions: Cmd[] = [

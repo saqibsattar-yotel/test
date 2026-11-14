@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ASSETS, closeTrade, computePerformance, filterTrades, hashString, TIMEFRAMES, type AssetId, type JournalTrade, type Timeframe } from "@terminal/core";
+import { ASSETS, closeTrade, computePerformance, contractSizeFor, defaultQuantityUnit, filterTrades, hashString, TIMEFRAMES, type AssetClass, type AssetId, type JournalTrade, type Timeframe } from "@terminal/core";
 import { assets } from "../services/assets";
 const isAssetId = (v: string) => assets.isSupported(v.toUpperCase());
 import { getSettings, journalStore } from "../services/user";
@@ -43,7 +43,7 @@ const closeBody = z.object({
 function parseFilter(q: Record<string, string | undefined>) {
   return {
     assetId: (q.asset && isAssetId(q.asset) ? q.asset : "all") as AssetId | "all",
-    assetClass: (q.class === "crypto" || q.class === "gold" ? q.class : "all") as "crypto" | "gold" | "all",
+    assetClass: (q.class === "crypto" || q.class === "gold" || q.class === "silver" ? q.class : "all") as AssetClass | "all",
     timeframe: ((TIMEFRAMES as string[]).includes(q.tf ?? "") ? q.tf : "all") as Timeframe | "all",
     setupType: q.setup || "all",
     status: (q.status === "open" || q.status === "closed" ? q.status : "all") as "open" | "closed" | "all",
@@ -180,14 +180,17 @@ export async function journalRoutes(app: FastifyInstance) {
       ["SOLUSD", "LONG", "liquidity_sweep_reversal", "15m", 141.2, 137.9, 149, 7, 148.5],
       ["BTCUSD", "SHORT", "breakdown", "4h", 58900, 60400, 55500, 0.04, 60450],
       ["XAUUSD", "LONG", "trend_pullback", "4h", 2602, 2581, 2660, 0.3, 2658],
+      ["XAGUSD", "LONG", "trend_pullback", "4h", 30.85, 30.2, 32.4, 0.04, 32.1],
       ["BNBUSD", "LONG", "mean_reversion", "1h", 561, 549, 590, 2, 574],
       ["XAUUSD", "LONG", "breakout", "1h", 2688, 2672, 2730, 0.2, 2671],
+      ["XAGUSD", "SHORT", "range_fade", "1h", 31.6, 31.95, 30.9, 0.05, 31.97],
     ];
     const trades: JournalTrade[] = samples.map((s, i) => {
       const [assetId, direction, setupType, timeframe, entry, stop, tp, qty, exit] = s;
       const meta = ASSETS[assetId];
       const openedAt = now - (samples.length - i) * 3 * 86_400_000;
-      const contractSize = assetId === "XAUUSD" ? 100 : 1;
+      const quantityUnit = defaultQuantityUnit(assetId);
+      const contractSize = contractSizeFor(assetId, quantityUnit);
       const base: JournalTrade = {
         id: `tr_test_${i}_${hashString(String(openedAt))}`,
         assetId,
@@ -200,7 +203,7 @@ export async function journalRoutes(app: FastifyInstance) {
         stop,
         takeProfit: tp,
         quantity: qty,
-        quantityUnit: assetId === "XAUUSD" ? "lots" : meta.base,
+        quantityUnit,
         riskPct: 1,
         riskAmount: Math.abs(entry - stop) * qty * contractSize,
         entryReasoning: "TEST DATA — illustrative trade for exploring the analytics UI.",

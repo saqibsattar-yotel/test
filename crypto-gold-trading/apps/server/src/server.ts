@@ -4,9 +4,9 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { config, featureFlags, loadedEnvFiles, repoRoot } from "./config";
-import { logger } from "./lib/logger";
+import { logger, reportOnce } from "./lib/logger";
 import { isAllowedOrigin, registerOriginGuard, type OriginPolicy } from "./lib/origin-guard";
-import { isWarming } from "./lib/warming";
+import { isUnavailable, isWarming } from "./lib/warming";
 import { cache } from "./lib/cache";
 import { marketRoutes } from "./routes/market";
 import { analysisRoutes } from "./routes/analysis";
@@ -18,10 +18,11 @@ import { aiRoutes } from "./routes/ai";
 import { assetRoutes } from "./routes/assets";
 import { monitorRoutes } from "./routes/monitor";
 import { backtestRoutes } from "./routes/backtest";
+import { metalRoutes } from "./routes/metals";
 import { assets } from "./services/assets";
 import { monitor } from "./services/monitor";
-import { liveSampler, getGoldVerification, getDxy, getInstrumentCandles, getWarmupStatus, prewarm as prewarmGold } from "./services/gold";
-import { market } from "./services/market";
+import { liveSampler, getWarmupStatus, prewarm as prewarmMetals } from "./services/metals";
+import { applyUserMigrations } from "./services/user";
 import { hub } from "./ws/hub";
 import { liquidations } from "./services/liquidations";
 import { alerts } from "./services/alerts";
@@ -38,7 +39,14 @@ export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
       // loading and ask again, without the browser logging an error for every poll.
       return reply.code(202).header("Retry-After", "5").header("Cache-Control", "no-store").send({ warming: true, error: (err as Error).message });
     }
-    log.error("request failed", err);
+    if (isUnavailable(err)) {
+      // Known to be out, and already reported once by the service that found out: answered plainly, not logged per
+      // request. Like "warming" this is "202 Accepted" (the server keeps trying to get the data in the background),
+      // so a page that asks again every half minute does not fill the browser console with failed requests.
+      return reply.code(202).header("Retry-After", "30").header("Cache-Control", "no-store").send({ unavailable: true, error: (err as Error).message });
+    }
+    // A page that polls a failing endpoint would repeat the same line every few seconds: once a minute is enough.
+    reportOnce(`request:${(err as Error).message}`, () => log.error("request failed", err), 60_000);
     reply.code((err as { statusCode?: number }).statusCode ?? 500).send({ error: (err as Error).message ?? "internal error" });
   });
 
@@ -56,27 +64,8 @@ export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
   app.get("/api/features", async () => featureFlags());
   // Progress of the one-time history download on a machine that has never run the terminal.
   app.get("/api/status/warmup", async () => getWarmupStatus());
-  app.get("/api/market/gold/verification", async () => getGoldVerification());
-  app.get("/api/market/dxy", async () => {
-    const d = await getDxy();
-    return { value: d.value, ts: d.ts, quality: d.quality, source: d.source, components: d.components, archiveLastClose: d.archiveLastClose, computedVsArchivePct: d.computedVsArchivePct, history1h: d.history1h.slice(-300), history1d: d.history1d.slice(-400), warming: d.historyWarming };
-  });
-  app.get("/api/market/gold/instruments", async () => {
-    const [spot, paxg, dukaDaily] = await Promise.allSettled([market.getQuotes(["XAUUSD"]), market.getQuotes(["PAXGUSD"]), getInstrumentCandles("XAUUSD", "1d", 2)]);
-    const liveSamplerState = { lastSampleAt: liveSampler.lastSampleAt, lastError: liveSampler.lastError };
-    const s = spot.status === "fulfilled" ? spot.value[0] : null;
-    const p = paxg.status === "fulfilled" ? paxg.value[0] : null;
-    const prev = dukaDaily.status === "fulfilled" && dukaDaily.value.length ? dukaDaily.value[dukaDaily.value.length - 1] : null;
-    return {
-      spot: s ? { quote: s, kind: "Spot XAU/USD (OTC, London/global interbank)", tradesWhen: "Sunday ~22:00 UTC to Friday ~22:00 UTC with a daily break around 22:00 UTC" } : null,
-      tokenized: p ? { quote: p, kind: "PAX Gold (PAXG) — ERC-20 token backed by vaulted gold, traded on crypto venues 24/7", premiumVsSpotPct: s ? ((p.price - s.price) / s.price) * 100 : null } : null,
-      futures: { kind: "COMEX gold futures (GC) — 100 troy oz, $0.10 tick = $10; MGC micro 10 oz", quote: null, note: "Live GC quotes need a licensed futures feed (e.g. a Twelve Data/CME-enabled plan). Contract specifications are available in the Risk Calculator; no price is fabricated here." },
-      archiveLastDaily: prev,
-      sampler: liveSamplerState,
-      warming: (spot.status === "fulfilled" && !s) || (dukaDaily.status === "rejected" && isWarming(dukaDaily.reason)),
-    };
-  });
 
+  await app.register(metalRoutes);
   await app.register(marketRoutes);
   await app.register(analysisRoutes);
   await app.register(contentRoutes);
@@ -117,16 +106,17 @@ export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
 
 async function main() {
   fs.mkdirSync(config.dataDir, { recursive: true });
+  await applyUserMigrations();
   const app = await buildServer();
   assets.start();
   liveSampler.start();
-  setTimeout(() => void prewarmGold(), 1000);
+  setTimeout(() => void prewarmMetals(), 1000);
   hub.start();
   liquidations.start();
   alerts.start();
   monitor.start();
   await app.listen({ port: config.PORT, host: config.HOST });
-  log.info(`listening on http://${config.HOST}:${config.PORT}  (demo mode: ${config.DEMO_MODE}; AI: ${config.hasAnthropic ? config.ANTHROPIC_MODEL : "rule-based"}; gold: ${config.hasTwelveData ? "Twelve Data + Dukascopy/Swissquote" : "Dukascopy archive + Swissquote live"})`);
+  log.info(`listening on http://${config.HOST}:${config.PORT}  (demo mode: ${config.DEMO_MODE}; AI: ${config.hasAnthropic ? config.ANTHROPIC_MODEL : "rule-based"}; gold & silver: ${config.hasTwelveData ? "Twelve Data + Dukascopy/Swissquote" : "Dukascopy archive + Swissquote live"})`);
   log.info(`environment: ${loadedEnvFiles.length ? loadedEnvFiles.join(" + ") : "no .env file found, using defaults"} (read from ${repoRoot})`);
   const extraOrigins = [...config.originPolicy.origins];
   log.info(`access: browser requests are accepted from this machine only${extraOrigins.length ? `, plus ${extraOrigins.join(", ")}` : ""}`);

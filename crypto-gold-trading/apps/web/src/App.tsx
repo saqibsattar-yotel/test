@@ -9,6 +9,7 @@ import { useSettings } from "@/lib/queries";
 const Overview = lazy(() => import("@/pages/Overview"));
 const Crypto = lazy(() => import("@/pages/Crypto"));
 const Gold = lazy(() => import("@/pages/Gold"));
+const Silver = lazy(() => import("@/pages/Silver"));
 const Setups = lazy(() => import("@/pages/Setups"));
 const Technical = lazy(() => import("@/pages/Technical"));
 const Intelligence = lazy(() => import("@/pages/Intelligence"));
@@ -60,6 +61,7 @@ export default function App() {
           <Route path="/" element={<Overview />} />
           <Route path="/crypto" element={<Crypto />} />
           <Route path="/gold" element={<Gold />} />
+          <Route path="/silver" element={<Silver />} />
           <Route path="/setups" element={<Setups />} />
           <Route path="/technical" element={<Technical />} />
           <Route path="/intelligence" element={<Intelligence />} />

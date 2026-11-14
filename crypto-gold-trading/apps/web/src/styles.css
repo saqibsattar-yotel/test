@@ -5,7 +5,8 @@
 /*
   Design tokens. Dark is the primary theme (charcoal / deep navy); light is a full
   second theme, not an inversion. Chart series colours are the validated dataviz
-  palette steps for each surface; bull/bear/gold/warning/critical are status tokens.
+  palette steps for each surface; bull/bear/gold/silver/warning/critical are status tokens
+  (gold and silver also identify the two metals wherever an asset is named).
 */
 :root {
   color-scheme: dark;
@@ -26,6 +27,8 @@
   --bear-soft: rgba(239, 83, 80, 0.14);
   --gold: #d4a537;
   --gold-soft: rgba(212, 165, 55, 0.14);
+  --silver: #9fb3c8;
+  --silver-soft: rgba(159, 179, 200, 0.16);
   --warning: #fab219;
   --critical: #d03b3b;
   --grid: #1b2430;
@@ -59,6 +62,8 @@
   --bear-soft: rgba(198, 40, 40, 0.12);
   --gold: #a16207;
   --gold-soft: rgba(161, 98, 7, 0.12);
+  --silver: #52657a;
+  --silver-soft: rgba(82, 101, 122, 0.12);
   --warning: #b45309;
   --critical: #b91c1c;
   --grid: #e5e7eb;
@@ -118,6 +123,9 @@ body {
 .text-gold {
   color: var(--gold);
 }
+.text-silver {
+  color: var(--silver);
+}
 .bg-bull-soft {
   background: var(--bull-soft);
 }
@@ -126,6 +134,9 @@ body {
 }
 .bg-gold-soft {
   background: var(--gold-soft);
+}
+.bg-silver-soft {
+  background: var(--silver-soft);
 }
 .bg-accent-soft {
   background: var(--accent-soft);

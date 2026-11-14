@@ -7,7 +7,7 @@ import { hashString } from "@terminal/core";
 import { logger } from "../lib/logger";
 import { hub } from "../ws/hub";
 import { userStore, type AlertRule, type TriggeredAlert } from "./user";
-import { getCryptoRegime, getGoldRegime, getSetupsFor } from "./analysis";
+import { getCryptoRegime, getMetalRegime, getSetupsFor } from "./analysis";
 
 const log = logger("alerts");
 
@@ -59,12 +59,14 @@ class AlertService {
       const state = await userStore.load();
       const regimeRules = state.alerts.filter((a) => a.active && a.kind === "regime_change");
       if (regimeRules.length) {
-        const [c, g] = await Promise.allSettled([getCryptoRegime(), getGoldRegime()]);
+        const [c, g, sv] = await Promise.allSettled([getCryptoRegime(), getMetalRegime("gold"), getMetalRegime("silver")]);
         const zones: Record<string, string> = {};
         if (c.status === "fulfilled") zones.crypto = c.value.result.zone;
         if (g.status === "fulfilled") zones.gold = g.value.result.zone;
+        if (sv.status === "fulfilled") zones.silver = sv.value.result.zone;
+        const names: Record<string, string> = { crypto: "Crypto regime", gold: "Gold posture", silver: "Silver posture" };
         for (const [k, z] of Object.entries(zones)) {
-          if (this.lastRegime[k] && this.lastRegime[k] !== z) for (const r of regimeRules) await this.fire(r, `${k === "crypto" ? "Crypto regime" : "Gold posture"} changed ${this.lastRegime[k]} → ${z}`);
+          if (this.lastRegime[k] && this.lastRegime[k] !== z) for (const r of regimeRules) await this.fire(r, `${names[k]} changed ${this.lastRegime[k]} → ${z}`);
           this.lastRegime[k] = z;
         }
       }

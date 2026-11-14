@@ -5,11 +5,12 @@ import { EquityCurve, HBarList, MonthlyBars } from "@/components/charts/Performa
 import { useJournalMutations, useJournalStats, useSettings } from "@/lib/queries";
 import { useUi } from "@/lib/store";
 import { cls, fmtMoney, fmtNum, fmtR, setupTypeLabel } from "@/lib/format";
+import { METAL_SOFT_BG, METAL_TEXT } from "@/lib/metals";
 
 export default function Performance() {
   const settings = useSettings();
   const currency = settings.data?.settings.accountCurrency ?? "USD";
-  const [cls_, setCls] = useState<"" | "crypto" | "gold">("");
+  const [cls_, setCls] = useState<"" | "crypto" | "gold" | "silver">("");
   const [range, setRange] = useState<"all" | "90" | "30">("all");
   const [test, setTest] = useState(false);
   const pushToast = useUi((s) => s.pushToast);
@@ -20,7 +21,7 @@ export default function Performance() {
   const pf = (v: number | null | undefined, positive = (s?.grossProfit ?? 0) > 0 && (s?.grossLoss ?? 0) === 0) => (typeof v === "number" && Number.isFinite(v) ? fmtNum(v, 2) : positive ? "∞" : "—");
   return (
     <div className="space-y-4">
-      <PageHeader title="Performance Analytics" description="Computed from recorded trades only. Test data is excluded unless you include it explicitly, and is always labelled." actions={<><Segmented size="sm" options={[{ value: "" as const, label: "All" }, { value: "crypto" as const, label: "Crypto" }, { value: "gold" as const, label: "Gold" }]} value={cls_} onChange={setCls} /><Segmented size="sm" options={[{ value: "all" as const, label: "All time" }, { value: "90" as const, label: "90d" }, { value: "30" as const, label: "30d" }]} value={range} onChange={setRange} /><Toggle checked={test} onChange={setTest} label="Include test data" /></>} />
+      <PageHeader title="Performance Analytics" description="Computed from recorded trades only. Test data is excluded unless you include it explicitly, and is always labelled." actions={<><Segmented size="sm" options={[{ value: "" as const, label: "All" }, { value: "crypto" as const, label: "Crypto" }, { value: "gold" as const, label: "Gold" }, { value: "silver" as const, label: "Silver" }]} value={cls_} onChange={setCls} /><Segmented size="sm" options={[{ value: "all" as const, label: "All time" }, { value: "90" as const, label: "90d" }, { value: "30" as const, label: "30d" }]} value={range} onChange={setRange} /><Toggle checked={test} onChange={setTest} label="Include test data" /></>} />
       {test && s?.includesTestData && <div className="rounded-lg bg-[rgba(250,178,25,0.12)] text-warn text-xs px-3 py-2 flex items-center gap-2"><FlaskConical className="h-3.5 w-3.5" /> Statistics include explicitly labelled TEST trades. They are illustrative and do not reflect real performance.</div>}
       {stats.isLoading ? <SkeletonBlock lines={6} /> : !s || s.closedTrades === 0 ? (
         <Card>
@@ -63,13 +64,13 @@ export default function Performance() {
                 </div>
               ) : <p className="text-xs text-ink-3">Not enough trades per setup yet (need 3+).</p>}
             </Card>
-            <Card title="Crypto vs gold">
-              <div className="grid grid-cols-2 gap-3">
-                {(["crypto", "gold"] as const).map((k) => {
+            <Card title="Crypto, gold and silver">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {(["crypto", "gold", "silver"] as const).map((k) => {
                   const c = s.byClass[k];
                   return (
-                    <div key={k} className={cls("card p-3", k === "gold" && "bg-gold-soft")}>
-                      <div className={cls("text-xs font-semibold uppercase tracking-wider", k === "gold" ? "text-gold" : "text-accent")}>{k}</div>
+                    <div key={k} className={cls("card p-3", k !== "crypto" && METAL_SOFT_BG[k])}>
+                      <div className={cls("text-xs font-semibold uppercase tracking-wider", k === "crypto" ? "text-accent" : METAL_TEXT[k])}>{k}</div>
                       {c ? (
                         <div className="mt-1 space-y-0.5 text-xs text-ink-2">
                           <div className="flex justify-between"><span>Trades</span><span className="tabular text-ink-1">{c.trades}</span></div>

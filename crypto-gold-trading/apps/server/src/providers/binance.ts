@@ -3,7 +3,7 @@
  * USDⓈ-M futures: premiumIndex (funding/mark), openInterest, openInterestHist, long/short.
  */
 import type { AssetId, Candle, DataSource, Quote, Timeframe } from "@terminal/core";
-import { assetBase } from "@terminal/core";
+import { assetBase, isMetalAsset } from "@terminal/core";
 import { fetchJson } from "../lib/http";
 import type { CandleProvider, CandleResult, DerivativesProvider, FundingInfo, OpenInterestInfo, QuoteProvider } from "./types";
 import { ProviderError } from "./types";
@@ -12,7 +12,7 @@ const SPOT = "https://api.binance.com";
 const FAPI = "https://fapi.binance.com";
 
 export function binanceSymbol(assetId: AssetId): string | null {
-  if (assetId === "XAUUSD") return null; // spot gold is served by the gold service, never by a token
+  if (isMetalAsset(assetId)) return null; // spot gold and silver are served by the metals service, never by a token
   const base = assetBase(assetId);
   return base ? `${base}USDT` : null;
 }
@@ -121,7 +121,7 @@ export class BinanceFuturesProvider implements DerivativesProvider {
     const bySymbol = new Map(all.map((p) => [String(p.symbol), p]));
     const out: FundingInfo[] = [];
     for (const assetId of assetIds) {
-      if (assetId === "XAUUSD") continue;
+      if (isMetalAsset(assetId)) continue;
       const symbol = binanceSymbol(assetId)!;
       const p = bySymbol.get(symbol);
       if (!p) continue;
@@ -142,7 +142,7 @@ export class BinanceFuturesProvider implements DerivativesProvider {
     return out;
   }
   async getOpenInterest(assetId: AssetId): Promise<OpenInterestInfo> {
-    if (assetId === "XAUUSD") throw new ProviderError(this.id, "no perpetual for XAU");
+    if (isMetalAsset(assetId)) throw new ProviderError(this.id, `no perpetual for ${assetBase(assetId)}`);
     const symbol = binanceSymbol(assetId)!;
     const [oi, hist, ls] = await Promise.all([
       fetchJson<{ openInterest: string; time: number }>(`${FAPI}/fapi/v1/openInterest?symbol=${symbol}`),

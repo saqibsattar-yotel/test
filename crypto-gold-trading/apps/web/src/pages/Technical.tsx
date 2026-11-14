@@ -17,7 +17,7 @@ export default function Technical() {
   const asset = ui.selectedAsset;
   const settings = useSettings();
   const L = useAssetLabel();
-  const quick = Array.from(new Set<AssetId>([...(settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"]), asset])).slice(-8);
+  const quick = Array.from(new Set<AssetId>([...(settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD", "XAGUSD"]), asset])).slice(-8);
   const [tfs, setTfs] = useState<Timeframe[]>(["15m", "1h", "4h", "1d"]);
   const analysis = useAnalysis(asset, tfs);
   const narrative = useNarrativeMutation();

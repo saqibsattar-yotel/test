@@ -2,7 +2,7 @@
   "name": "crypto-gold-terminal",
   "version": "0.1.0",
   "private": true,
-  "description": "AI-assisted crypto and gold trading intelligence terminal (research and decision support, not execution)",
+  "description": "AI-assisted crypto, gold and silver trading intelligence terminal (research and decision support, not execution)",
   "license": "MIT",
   "workspaces": [
     "packages/*",

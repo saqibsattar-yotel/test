@@ -1,4 +1,4 @@
-import { Activity, BarChart3, Bitcoin, BookOpen, Calculator, Coins, FlaskConical, Globe2, LayoutDashboard, Settings, Target, type LucideIcon } from "lucide-react";
+import { Activity, BarChart3, Bitcoin, BookOpen, Calculator, Coins, Disc, FlaskConical, Globe2, LayoutDashboard, Settings, Target, type LucideIcon } from "lucide-react";
 
 export interface NavItem {
   to: string;
@@ -13,6 +13,7 @@ export const NAV: NavItem[] = [
   { to: "/", label: "Overview", short: "Home", icon: LayoutDashboard, key: "o", mobile: true },
   { to: "/crypto", label: "Crypto Analysis", short: "Crypto", icon: Bitcoin, key: "c", mobile: true },
   { to: "/gold", label: "Gold Analysis", short: "Gold", icon: Coins, key: "g", mobile: true },
+  { to: "/silver", label: "Silver Analysis", short: "Silver", icon: Disc, key: "v", mobile: true },
   { to: "/setups", label: "AI Trade Setups", short: "Setups", icon: Target, key: "s", mobile: true },
   { to: "/technical", label: "Technical Analysis", short: "Technical", icon: Activity, key: "t" },
   { to: "/intelligence", label: "Market Intelligence", short: "Intel", icon: Globe2, key: "i" },

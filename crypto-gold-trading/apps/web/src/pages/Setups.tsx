@@ -12,6 +12,7 @@ import { TradeForm, prefillFromSetup, type TradePrefill } from "@/components/jou
 import { useSettings, useSetups } from "@/lib/queries";
 import { useUiNoQuotes } from "@/lib/store";
 import { cls, fmtAge } from "@/lib/format";
+import { assetTone } from "@/lib/metals";
 
 type Filter = "all" | "actionable" | "wait" | "none";
 
@@ -26,7 +27,7 @@ export default function Setups() {
   const [paper, setPaper] = useState<TradePrefill | null>(null);
   const [tab, setTab] = useState<"live" | "monitor" | "history">("live");
   const monitorQ = useMonitor();
-  const followed = settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"];
+  const followed = settings.data?.settings.followedAssets ?? ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD", "XAGUSD"];
   const selected = assets ?? followed;
   const L = useAssetLabel();
   const q = useSetups(selected, tf, settings.data?.settings.accountBalance, settings.data?.settings.defaultRiskPct);
@@ -74,7 +75,7 @@ export default function Setups() {
           </div>
           <div className="flex items-center gap-1.5 flex-wrap lg:ml-auto">
             {selected.map((a) => (
-              <AssetChip key={a} id={a} label={L(a).base} tone={a === "XAUUSD" ? "gold" : "accent"} onRemove={() => toggleAsset(a)} />
+              <AssetChip key={a} id={a} label={L(a).base} tone={assetTone(a)} onRemove={() => toggleAsset(a)} />
             ))}
             <AssetPicker size="sm" className="w-56" placeholder="Add coin…" exclude={selected} onSelect={(id) => setAssets([...selected, id as AssetId])} />
           </div>

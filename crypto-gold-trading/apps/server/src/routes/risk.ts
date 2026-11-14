@@ -1,13 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { INSTRUMENT_SPECS, evaluateCircuitBreaker, evaluateDisciplineGate, portfolioHeat, sizePosition, type InstrumentSpec, isAssetId, type AssetId } from "@terminal/core";
+import { INSTRUMENT_KINDS, INSTRUMENT_SPECS, METALS, evaluateCircuitBreaker, evaluateDisciplineGate, isMetalAsset, portfolioHeat, sizePosition, type InstrumentKind, type InstrumentSpec, isAssetId, type AssetId } from "@terminal/core";
 import { market } from "../services/market";
 import { getSettings, journalStore } from "../services/user";
-import { getCryptoRegime, getGoldRegime } from "../services/analysis";
+import { getCryptoRegime, getMetalRegime } from "../services/analysis";
 
 const customSpec = z.object({
   id: z.string().default("custom"),
-  kind: z.enum(["crypto_spot", "crypto_perp", "crypto_futures_cme", "gold_cfd", "gold_futures"]),
+  kind: z.enum(INSTRUMENT_KINDS as [InstrumentKind, ...InstrumentKind[]]),
   label: z.string().default("Custom instrument"),
   contractSize: z.number().positive(),
   baseUnit: z.string().default("units"),
@@ -90,7 +90,7 @@ export async function riskRoutes(app: FastifyInstance) {
     const cb = evaluateCircuitBreaker(closed, settings.accountBalance, Date.now(), { maxDailyLossPct: 2, losingStreakN: 2, cooldownHours: 24, weeklyDrawdownPct: 5, monthlyDrawdownPct: 8, zone: settings.timezone || "UTC" });
     let regime: { zone: string; direction: "LONG" | "SHORT" | null } | null = null;
     try {
-      if (b.assetId === "XAUUSD") regime = { zone: (await getGoldRegime()).result.zone, direction: b.direction ?? null };
+      if (b.assetId && isMetalAsset(b.assetId)) regime = { zone: (await getMetalRegime(METALS[b.assetId].metal)).result.zone, direction: b.direction ?? null };
       else if (b.assetId) regime = { zone: (await getCryptoRegime()).result.zone, direction: b.direction ?? null };
     } catch {
       regime = null;

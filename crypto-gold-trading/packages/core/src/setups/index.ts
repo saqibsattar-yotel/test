@@ -8,7 +8,7 @@
  * server and may only reference the numbers produced here.
  */
 import type { AssetId, Bias, Candle, DataSource, DataStatusEntry, Direction, EvidenceItem, IndicatorContribution, KeyLevels, Level, MtfConfirmation, SetupStatus, SetupType, Target, Timeframe, TradeSetup } from "../types";
-import { resolveAsset, TIMEFRAME_MS } from "../types";
+import { isMetalClass, resolveAsset, TIMEFRAME_MS } from "../types";
 import { contextTimeframeFor, expectedHoldFor } from "../timeframes";
 import { analyzeTimeframe, type MtfResult, type TimeframeAnalysis } from "../mtf";
 import { fibonacci, lastImpulse, findSwings, liquidityZones, periodLevels, roundNumberLevels, sessionRanges, type SRLevel } from "../structure";
@@ -24,6 +24,8 @@ export interface SetupEngineInput {
   now: number;
   dataSource: DataSource;
   sizing?: { accountBalance: number; riskPct: number; prefer?: "spot" | "perp" | "cfd" | "futures" };
+  /** Reasons the input data must not be traded on (e.g. history with gaps). Any entry forces NO TRADE. */
+  dataBlockers?: string[];
 }
 
 export interface SetupEngineOutput {
@@ -65,6 +67,7 @@ export function generateSetups(input: SetupEngineInput): SetupEngineOutput {
   };
 
   if (!exec || candles.length < 60) return noTrade(["Not enough candles on the trading timeframe to analyse structure (need ≥ 60)."]);
+  if (input.dataBlockers?.length) return noTrade(input.dataBlockers, [{ text: "Incomplete market data", weight: -100, category: "data" }]);
   if (!exec.quality.ok) return noTrade([`Data quality errors on ${tf}: ${exec.quality.issues.filter((i) => i.severity === "error").map((i) => i.message).join("; ")}`]);
   if (exec.quality.stale) return noTrade([`Market data on ${tf} is stale (${exec.quality.issues.find((i) => i.code === "stale")?.message}). No setup is generated on stale prices.`], [{ text: "Stale data", weight: -100, category: "data" }]);
 
@@ -556,7 +559,7 @@ function buildSetup(c: Candidate, input: SetupEngineInput, exec: TimeframeAnalys
 
   let sizingPreview: TradeSetup["sizingPreview"];
   if (input.sizing && status !== "NO TRADE") {
-    const spec = defaultSpecFor(input.assetId, input.sizing.prefer ?? (meta.assetClass === "gold" ? "cfd" : "spot"));
+    const spec = defaultSpecFor(input.assetId, input.sizing.prefer ?? (isMetalClass(meta.assetClass) ? "cfd" : "spot"));
     const s = sizePosition({ accountBalance: input.sizing.accountBalance, accountCurrency: "USD", riskPct: input.sizing.riskPct, direction: c.direction, entry: entryMid, stop, takeProfit: targets[1].price, spec });
     if (s.status === "SIZED") sizingPreview = { accountBalance: input.sizing.accountBalance, riskPct: input.sizing.riskPct, quantity: s.quantity, quantityUnit: s.quantityUnit, riskAmount: s.potentialLossAccount, potentialProfitTp2: s.potentialProfitAccount ?? 0 };
   }

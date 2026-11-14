@@ -1,4 +1,4 @@
-import type { AssetId, Candle, DataSource, EconEvent, JournalTrade, Level, PerformanceStats, Quote, SizingResult, InstrumentSpec, Timeframe, TradeSetup, MtfResult, CryptoRegimeResult, GoldRegimeResult, GateResult, CircuitBreakerDecision, IndicatorSnapshot, StructureSummary, SRLevel, PeriodLevels, SessionRange, QualityReport, AssetMeta, ComponentResult, MonitoredSetup, BacktestResult } from "@terminal/core";
+import type { AssetId, Candle, DataSource, EconEvent, JournalTrade, Level, PerformanceStats, Quote, SizingResult, InstrumentSpec, Timeframe, TradeSetup, MtfResult, CryptoRegimeResult, MetalRegimeResult, Metal, GateResult, CircuitBreakerDecision, IndicatorSnapshot, StructureSummary, SRLevel, PeriodLevels, SessionRange, QualityReport, AssetMeta, ComponentResult, MonitoredSetup, BacktestResult } from "@terminal/core";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: unknown) {
@@ -15,14 +15,40 @@ export function isWarmingError(error: unknown): boolean {
   return error instanceof ApiError && (error.body as { warming?: unknown } | null | undefined)?.warming === true;
 }
 
-/** Progress of the one-time history download (GET /api/status/warmup). */
+/**
+ * "202 Accepted" with `unavailable: true`: the source is known to be out (for example a metal's price
+ * history that the archive has not delivered) while the server keeps trying. Unlike "warming" this is
+ * shown as an error state with its reason, not as loading; it clears by itself.
+ */
+export function isUnavailableError(error: unknown): boolean {
+  return error instanceof ApiError && (error.body as { unavailable?: unknown } | null | undefined)?.unavailable === true;
+}
+
+/** Archive files of one kind: how many were needed, how many are in, how many are waiting to be retried. */
+export interface ArchiveClassProgress {
+  total: number;
+  done: number;
+  failing: number;
+}
+
+/** Progress of the one-time history download (GET /api/status/warmup). `warming` covers the gold and silver history only. */
 export interface WarmupStatus {
   warming: boolean;
+  /** Nothing at all had been downloaded before this start. */
   firstRun: boolean;
+  /** Metals whose history had never been downloaded on this machine when the server started. */
+  firstTime: Metal[];
   startedAt: number | null;
   finishedAt: number | null;
-  steps: { id: string; label: string; state: "pending" | "running" | "done" | "failed"; ms: number | null; error?: string }[];
-  files: { downloaded: number; failed: number; active: number; queued: number };
+  steps: { id: string; metal: Metal; label: string; state: "pending" | "running" | "done" | "failed"; ms: number | null; error?: string }[];
+  /** Some history of this metal is being served with gaps because the archive kept refusing files. */
+  goldGaps: boolean;
+  silverGaps: boolean;
+  /** Metals of which the archive has delivered nothing at all: their charts and analysis say "unavailable" (live prices still work). */
+  unavailable: Metal[];
+  /** The close-based dollar-index history downloads after the metals, in the background. */
+  dollarIndex: "pending" | "downloading" | "ready";
+  archive: { gold: ArchiveClassProgress; silver: ArchiveClassProgress; other: ArchiveClassProgress; active: number; queued: number; state: "ok" | "paused" | "recovering"; resumesAt: number | null; nextRetryAt: number | null };
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -40,6 +66,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   // 202 + `warming` is the server saying "not ready yet": surface it as a (retryable) error, never as data.
   if (res.status === 202 && (data as { warming?: unknown } | null)?.warming === true) throw new ApiError(202, (data as { error?: string }).error ?? "Data is still being prepared", data);
+  // 202 + `unavailable`: the source is out for now. Also an error, never data; shown with its reason.
+  if (res.status === 202 && (data as { unavailable?: unknown } | null)?.unavailable === true) throw new ApiError(202, (data as { error?: string }).error ?? "This data is not available right now", data);
   return data as T;
 }
 
@@ -55,6 +83,7 @@ export const api = {
 export interface FeatureFlags {
   ai: { enabled: boolean; model: string | null; fallback: string };
   goldSpot: { provider: string; proxy: boolean };
+  silverSpot: { provider: string; proxy: boolean };
   macro: { yields: string; dollarIndex: string };
   calendar: { officialSchedule: boolean; forexFactoryFeed: boolean };
   demoMode: "auto" | "force" | "off";
@@ -139,6 +168,7 @@ export interface NewsItem {
   link: string;
   publishedAt: number;
   publisher: string;
+  /** What the feed the item came from is about (a silver headline is one whose `relevance` includes "silver"). */
   topics: ("crypto" | "gold" | "macro")[];
   summary: string | null;
   relevance: string[];
@@ -158,20 +188,35 @@ export interface LiquidationsSummary {
 
 export interface OverviewResponse {
   generatedAt: number;
-  /** Gold parts are missing because their history is still being downloaded for the first time. */
+  /** Gold or silver parts are missing because their history is still being downloaded for the first time. */
   warming?: boolean;
   quotes: Quote[];
   global: GlobalMarket | { error: string } | null;
   fearGreed: FearGreed | { error: string } | null;
   funding: { avg8h: number | null; items: FundingItem[]; source: DataSource | null; error?: string } | null;
-  regime: { crypto: { score: number | null; zone: string; guidance: string; notes: string[] } | null; gold: { score: number | null; zone: string; guidance: string; notes: string[] } | null };
-  goldTrend: { emaStack: string; aboveEma200: boolean; rsi: number; atrPct: number; source: DataSource } | null;
-  volatility: { btcAtrPct1d: number | null; goldAtrPct1d: number | null; btcBollingerSqueeze: boolean | null };
+  regime: { crypto: RegimeSummary | null; gold: RegimeSummary | null; silver: RegimeSummary | null };
+  goldTrend: MetalTrend | null;
+  silverTrend: MetalTrend | null;
+  volatility: { btcAtrPct1d: number | null; goldAtrPct1d: number | null; silverAtrPct1d: number | null; btcBollingerSqueeze: boolean | null };
   conditions: { bullish: string[]; bearish: string[] };
   upcomingEvents: EconEvent[];
   news: NewsItem[];
   briefing: Narrative;
   assetsMeta: AssetMeta[];
+}
+
+export interface RegimeSummary {
+  score: number | null;
+  zone: string;
+  guidance: string;
+  notes: string[];
+}
+export interface MetalTrend {
+  emaStack: string;
+  aboveEma200: boolean;
+  rsi: number;
+  atrPct: number;
+  source: DataSource;
 }
 
 export interface TimeframeDetail {
@@ -215,7 +260,8 @@ export interface RegimeResponse<T> {
   explanation: string[];
 }
 export type CryptoRegimeResponse = RegimeResponse<CryptoRegimeResult>;
-export type GoldRegimeResponse = RegimeResponse<GoldRegimeResult>;
+/** The posture of gold or silver: the same shape, `result.metal` says which. */
+export type MetalRegimeResponse = RegimeResponse<MetalRegimeResult>;
 
 export interface SetupsResponse {
   setups: TradeSetup[];
@@ -271,6 +317,13 @@ export interface IntelResponse {
     positioning: { available: boolean; note: string };
     posture: { score: number | null; zone: string; components: ComponentResult[]; notes: string[] } | null;
     why: { dollar: string; yields: string; macro: string };
+  };
+  silver: {
+    posture: { score: number | null; zone: string; components: ComponentResult[]; notes: string[] } | null;
+    ratio: GoldSilverRatio | null;
+    silverNews: NewsItem[];
+    positioning: { available: boolean; note: string };
+    why: { drivers: string; ratio: string };
   };
 }
 
@@ -393,18 +446,33 @@ export interface BacktestResponse {
   source: DataSource;
   warnings: string[];
 }
-export interface GoldVerification {
+/** Cross-check of one metal's spot price (GET /api/market/gold|silver/verification). */
+export interface MetalVerification {
+  metal: Metal;
   checkedAt: number;
   marketOpen: boolean;
   warming?: boolean;
-  spot: { swissquote: { price: number; ts: number } | null; goldApi: { price: number; ts: number } | null; dukascopyLastClose: { price: number; ts: number } | null; twelveData: { price: number; ts: number } | null; maxDeviationPct: number | null; status: "verified" | "divergent" | "insufficient" };
+  spot: { swissquote: { price: number; ts: number } | null; goldApi: { price: number; ts: number } | null; dukascopyLastClose: { price: number; ts: number } | null; twelveData: { price: number; ts: number } | null; maxDeviationPct: number | null; tolerancePct: number; status: "verified" | "divergent" | "insufficient" };
   dxy: { live: { value: number; ts: number } | null; archiveLastClose: { value: number; ts: number } | null; syntheticEcb: { value: number; date: string } | null; maxDeviationPct: number | null; status: "verified" | "divergent" | "insufficient" };
   notes: string[];
 }
-export interface GoldInstruments {
+/** XAU/USD ÷ XAG/USD from the two spot quotes, with its place in the last year of daily closes. */
+export interface GoldSilverRatio {
+  value: number | null;
+  ts: number | null;
+  gold: number | null;
+  silver: number | null;
+  year: { high: number; low: number; percentile: number; change20dPct: number | null; days: number } | null;
+  source: DataSource;
+}
+/** The different instruments that carry a metal's name (GET /api/market/gold|silver/instruments). */
+export interface MetalInstruments {
+  metal: Metal;
   spot: { quote: Quote; kind: string; tradesWhen: string } | null;
+  /** Gold only: PAX Gold. Silver has no liquid tokenised counterpart on the venues read here. */
   tokenized: { quote: Quote; kind: string; premiumVsSpotPct: number | null } | null;
   futures: { kind: string; quote: null; note: string };
+  ratio: GoldSilverRatio | null;
   archiveLastDaily: Candle | null;
   sampler: { lastSampleAt: number; lastError: string | null };
   warming?: boolean;
@@ -423,8 +491,10 @@ export interface DxyResponse {
   computedVsArchivePct: number | null;
   history1h: SeriesPoint[];
   history1d: SeriesPoint[];
-  /** The history is still being downloaded for the first time; only the live value is available. */
+  /** The close-based history is still being downloaded in the background; only the live value is available. */
   warming?: boolean;
+  /** Download progress of the FX files that history is built from. */
+  archive?: ArchiveClassProgress;
 }
 
 export function qs(params: Record<string, string | number | boolean | undefined | null>): string {

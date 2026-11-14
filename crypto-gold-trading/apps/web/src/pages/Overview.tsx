@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CalendarClock, Newspaper, Star } from "lucide-react";
 import { assetBase, type AssetId, type Timeframe } from "@terminal/core";
@@ -11,6 +11,20 @@ import { NarrativeBlock } from "@/components/setups/NarrativeBlock";
 import { useCandles, useOverview, useSettings, useUpdateWatchlist, useWatchlist } from "@/lib/queries";
 import { useUi, useUiNoQuotes } from "@/lib/store";
 import { cls, fmtAge, fmtCompact, fmtDateTime, fmtPct, fmtPrice, fmtUntil, toneForChange } from "@/lib/format";
+import { assetTextClass, isMetalAsset, workspacePath } from "@/lib/metals";
+
+/**
+ * Headline tiles: two per row on a phone (Bitcoin full width), a crypto row and a metals row on a
+ * laptop, all five in one row on a wide screen.
+ */
+const HEADLINE: { assetId: AssetId; span: string }[] = [
+  { assetId: "BTCUSD", span: "col-span-2 lg:col-span-2 2xl:col-span-1" },
+  { assetId: "ETHUSD", span: "lg:col-span-2 2xl:col-span-1" },
+  { assetId: "SOLUSD", span: "lg:col-span-2 2xl:col-span-1" },
+  { assetId: "XAUUSD", span: "lg:col-span-3 2xl:col-span-1" },
+  { assetId: "XAGUSD", span: "lg:col-span-3 2xl:col-span-1" },
+];
+const POSTURE_HINT = "5-component macro-technical composite (trend, dollar, real yields, momentum, volatility). The dollar leg measures the live correlation instead of assuming an inverse.";
 
 const TFS: Timeframe[] = ["15m", "1h", "4h", "1d"];
 
@@ -25,36 +39,37 @@ export default function Overview() {
   const [tf, setTf] = useState<Timeframe>(ui.selectedTimeframe);
   const asset = ui.selectedAsset;
   const candles = useCandles(asset, tf, 400);
-  const headline: AssetId[] = useMemo(() => ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"], []);
   const d = ov.data;
   const tz = ui.timezone;
   const regimeC = d?.regime.crypto;
   const regimeG = d?.regime.gold;
+  const regimeS = d?.regime.silver;
   const fng = d?.fearGreed && !("error" in d.fearGreed) ? d.fearGreed : null;
   const global = d?.global && !("error" in d.global) ? d.global : null;
   const avgF = d?.funding?.avg8h ?? null;
 
   return (
     <div className="space-y-4">
-      <PageHeader title="Overview" description="Live market state across crypto and gold with the regime read, scheduled risk and the day's briefing. Every panel names its data source." actions={<span className="text-xs text-ink-3">{d ? `Refreshed ${fmtAge(d.generatedAt)}` : ""}</span>} />
+      <PageHeader title="Overview" description="Live market state across crypto, gold and silver with the regime read, scheduled risk and the day's briefing. Every panel names its data source." actions={<span className="text-xs text-ink-3">{d ? `Refreshed ${fmtAge(d.generatedAt)}` : ""}</span>} />
 
-      {show("tickers") && <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {headline.map((a) => (
-          <QuoteTile key={a} assetId={a} onClick={() => ui.setSelectedAsset(a)} active={asset === a} />
+      {show("tickers") && <div className="grid grid-cols-2 lg:grid-cols-6 2xl:grid-cols-5 gap-3">
+        {HEADLINE.map(({ assetId, span }) => (
+          <QuoteTile key={assetId} assetId={assetId} onClick={() => ui.setSelectedAsset(assetId)} active={asset === assetId} className={span} />
         ))}
       </div>}
 
-      {show("regime") && <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      {show("regime") && <div className="grid grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7 gap-3">
         <Stat label="Crypto regime" hint="6-component composite (BTC trend, alt breadth, dominance, funding, drawdown/vol, momentum). 0–39 risk-off, 40–79 neutral, 80+ risk-on. Descriptive, not predictive." value={regimeC ? (regimeC.score === null ? "UNKNOWN" : regimeC.score.toFixed(0)) : ov.isLoading ? "…" : "—"} delta={regimeC?.zone.replace("_", " ")} deltaTone={regimeC ? zoneTone(regimeC.zone) : "muted"} sub={<Meter value={regimeC?.score ?? null} tone={regimeC ? zoneTone(regimeC.zone) : "muted"} className="mt-1" />} />
-        <Stat label="Gold posture" hint="5-component macro-technical composite (trend, dollar, real yields, momentum, volatility). The dollar leg measures the live correlation instead of assuming an inverse." value={regimeG ? (regimeG.score === null ? "UNKNOWN" : regimeG.score.toFixed(0)) : ov.isLoading ? "…" : "—"} delta={regimeG?.zone} deltaTone={regimeG ? zoneTone(regimeG.zone) : "muted"} sub={<Meter value={regimeG?.score ?? null} tone={regimeG ? zoneTone(regimeG.zone) : "muted"} className="mt-1" />} />
+        <Stat label="Gold posture" hint={POSTURE_HINT} value={regimeG ? (regimeG.score === null ? "UNKNOWN" : regimeG.score.toFixed(0)) : ov.isLoading ? "…" : "—"} delta={regimeG?.zone} deltaTone={regimeG ? zoneTone(regimeG.zone) : "muted"} sub={<Meter value={regimeG?.score ?? null} tone={regimeG ? zoneTone(regimeG.zone) : "muted"} className="mt-1" />} />
+        <Stat label="Silver posture" hint={`${POSTURE_HINT} Same method as gold, on silver's own prices.`} value={regimeS ? (regimeS.score === null ? "UNKNOWN" : regimeS.score.toFixed(0)) : ov.isLoading ? "…" : "—"} delta={regimeS?.zone} deltaTone={regimeS ? zoneTone(regimeS.zone) : "muted"} sub={<Meter value={regimeS?.score ?? null} tone={regimeS ? zoneTone(regimeS.zone) : "muted"} className="mt-1" />} />
         <Stat label="Fear & Greed" hint="alternative.me crypto sentiment composite, updated daily." value={fng ? fng.value : "—"} delta={fng?.classification} deltaTone={fng ? (fng.value <= 25 ? "bear" : fng.value >= 75 ? "bull" : "neutral") : "muted"} sub={fng ? <Sparkline values={fng.history.map((h) => h.value)} tone="muted" width={120} height={22} /> : undefined}>
           {fng && <SourceBadge source={fng.source} compact />}
         </Stat>
-        <Stat label="Total crypto market cap" value={global ? `$${fmtCompact(global.totalMarketCapUsd, 2)}` : "—"} delta={global ? fmtPct(global.marketCapChange24hPct) : undefined} deltaTone={toneForChange(global?.marketCapChange24hPct)} sub={global ? `24h volume $${fmtCompact(global.totalVolume24hUsd, 1)}` : undefined}>
+        <Stat className="col-span-2 2xl:col-span-1" label="Total crypto market cap" value={global ? `$${fmtCompact(global.totalMarketCapUsd, 2)}` : "—"} delta={global ? fmtPct(global.marketCapChange24hPct) : undefined} deltaTone={toneForChange(global?.marketCapChange24hPct)} sub={global ? `24h volume $${fmtCompact(global.totalVolume24hUsd, 1)}` : undefined}>
           {global && <SourceBadge source={global.source} compact />}
         </Stat>
         <Stat label="BTC dominance" value={global ? `${global.btcDominancePct.toFixed(1)}%` : "—"} sub={global ? `ETH ${global.ethDominancePct.toFixed(1)}%` : undefined} hint="Bitcoin's share of total crypto market capitalisation (CoinGecko)." />
-        <Stat label="Avg perp funding (8h)" hint="Average latest funding rate across tracked USDT perpetuals. Positive = longs pay shorts." value={avgF !== null ? `${(avgF * 100).toFixed(4)}%` : "—"} delta={avgF !== null ? `${(avgF * 3 * 365 * 100).toFixed(1)}% ann.` : undefined} deltaTone={avgF !== null ? (avgF > 0.0003 ? "bear" : avgF < 0 ? "bull" : "neutral") : "muted"} sub={d?.volatility.btcAtrPct1d ? `BTC daily ATR ${d.volatility.btcAtrPct1d.toFixed(2)}% · gold ${d.volatility.goldAtrPct1d?.toFixed(2) ?? "—"}%` : undefined}>
+        <Stat label="Avg perp funding (8h)" hint="Average latest funding rate across tracked USDT perpetuals. Positive = longs pay shorts." value={avgF !== null ? `${(avgF * 100).toFixed(4)}%` : "—"} delta={avgF !== null ? `${(avgF * 3 * 365 * 100).toFixed(1)}% ann.` : undefined} deltaTone={avgF !== null ? (avgF > 0.0003 ? "bear" : avgF < 0 ? "bull" : "neutral") : "muted"} sub={d?.volatility.btcAtrPct1d ? <span className="block whitespace-normal" title={`Daily ATR as a share of price: BTC ${d.volatility.btcAtrPct1d.toFixed(2)}%, gold ${d.volatility.goldAtrPct1d?.toFixed(2) ?? "—"}%, silver ${d.volatility.silverAtrPct1d?.toFixed(2) ?? "—"}%`}>1d ATR · BTC {d.volatility.btcAtrPct1d.toFixed(1)}% · XAU {d.volatility.goldAtrPct1d?.toFixed(1) ?? "—"}% · XAG {d.volatility.silverAtrPct1d?.toFixed(1) ?? "—"}%</span> : undefined}>
           {d?.funding?.source && <SourceBadge source={d.funding.source} compact />}
         </Stat>
       </div>}
@@ -79,7 +94,7 @@ export default function Overview() {
             }
           >
             <div className="px-4 pt-3">
-              <Segmented size="sm" options={Array.from(new Set([...headline, asset])).map((a) => ({ value: a, label: assetBase(a) }))} value={asset} onChange={(a) => ui.setSelectedAsset(a)} />
+              <Segmented size="sm" options={Array.from(new Set([...HEADLINE.map((h) => h.assetId), asset])).map((a) => ({ value: a, label: assetBase(a) }))} value={asset} onChange={(a) => ui.setSelectedAsset(a)} />
             </div>
             {candles.data && <DataNotice sources={[candles.data.source]} warnings={candles.data.warnings} className="px-4 pt-3" />}
             {candles.isLoading ? <div className="skeleton h-[560px] m-4" /> : candles.isError ? <ErrorState message={(candles.error as Error).message} retry={() => candles.refetch()} /> : candles.data ? <PriceChart assetId={asset} timeframe={tf} candles={candles.data.candles} overlays={{ ...DEFAULT_OVERLAYS, levels: false }} height={360} /> : null}
@@ -159,6 +174,7 @@ export default function Overview() {
                     <div className="text-[10.5px] text-ink-3 mt-0.5">
                       {n.publisher} · {fmtAge(n.publishedAt)}
                       {n.relevance.includes("gold") && <span className="text-gold"> · gold</span>}
+                      {n.relevance.includes("silver") && <span className="text-silver"> · silver</span>}
                       {n.relevance.includes("btc") && <span className="text-accent"> · BTC</span>}
                       {n.relevance.includes("fed") && <span className="text-warn"> · Fed</span>}
                     </div>
@@ -195,24 +211,25 @@ function ConditionList({ items, tone }: { items: string[]; tone: "bull" | "bear"
   );
 }
 
-export function QuoteTile({ assetId, onClick, active }: { assetId: AssetId; onClick?: () => void; active?: boolean }) {
+export function QuoteTile({ assetId, onClick, active, className }: { assetId: AssetId; onClick?: () => void; active?: boolean; className?: string }) {
   const q = useUi((s) => s.quotes[assetId]);
   const L = useAssetLabel();
   const spark = useCandles(assetId, "1h", 48);
   const tone = toneForChange(q?.changePct24h);
-  const gold = assetId === "XAUUSD";
+  const metal = isMetalAsset(assetId);
   return (
-    <button onClick={onClick} className={cls("card text-left px-4 py-3.5 min-w-0 transition-colors hover:bg-surface-2", active && "ring-1 ring-accent")}>
+    <button onClick={onClick} className={cls("card text-left px-4 py-3.5 min-w-0 transition-colors hover:bg-surface-2", active && "ring-1 ring-accent", className)}>
       <div className="flex items-center justify-between gap-2">
-        <span className={cls("text-xs font-semibold", gold ? "text-gold" : "text-ink-2")}>{L(assetId).symbol}</span>
+        <span className={cls("text-xs font-semibold", assetTextClass(assetId, "text-ink-2"))}>{L(assetId).symbol}</span>
         {q ? <SourceBadge source={q.source} compact /> : <span className="skeleton h-4 w-16" />}
       </div>
       <div className="mt-1 flex items-end justify-between gap-2">
         <div className="min-w-0">
           <div className="text-lg sm:text-xl font-semibold text-ink-1 tabular truncate">{q ? fmtPrice(q.price, assetId) : "—"}</div>
           <div className={cls("text-xs tabular font-medium", tone === "bull" ? "text-bull" : tone === "bear" ? "text-bear" : "text-ink-3")}>
-            {q ? `${fmtPct(q.changePct24h)} · ${q.change24h >= 0 ? "+" : ""}${fmtPrice(q.change24h, assetId)}` : ""}
-            <span className="text-ink-3 font-normal"> {gold && q?.source.provider === "twelvedata" ? "vs prev close" : "24h"}</span>
+            {/* The change is null when its reference price is not known (a metal whose previous close could not be loaded). */}
+            {q && q.change24h !== null && q.changePct24h !== null ? `${fmtPct(q.changePct24h)} · ${q.change24h >= 0 ? "+" : ""}${fmtPrice(q.change24h, assetId)}` : ""}
+            <span className="text-ink-3 font-normal"> {q && q.change24h === null ? "change unavailable" : metal ? "vs prev close" : "24h"}</span>
           </div>
         </div>
         {spark.data ? <Sparkline values={spark.data.candles.map((c) => c.close)} tone="auto" width={88} height={30} className="hidden sm:block shrink-0" /> : <span className="skeleton h-7 w-20 hidden sm:block" />}
@@ -263,14 +280,11 @@ function Watchlist() {
                     className="flex-1 min-w-0 flex items-center gap-2 text-left"
                     onClick={() => {
                       setSelected(a);
-                      if (a === "XAUUSD") navigate("/gold");
-                      else {
-                        setCrypto(a);
-                        navigate("/crypto");
-                      }
+                      if (!isMetalAsset(a)) setCrypto(a);
+                      navigate(workspacePath(a));
                     }}
                   >
-                    <span className={cls("text-sm font-medium w-14", a === "XAUUSD" ? "text-gold" : "text-ink-1")}>{assetBase(a)}</span>
+                    <span className={cls("text-sm font-medium w-14", assetTextClass(a))}>{assetBase(a)}</span>
                     <span className="text-xs text-ink-3 truncate hidden sm:inline">{L(a).name}</span>
                     <span className="ml-auto text-sm tabular text-ink-1">{q ? fmtPrice(q.price, a) : "—"}</span>
                     <span className={cls("w-16 text-right text-xs tabular", tone === "bull" ? "text-bull" : tone === "bear" ? "text-bear" : "text-ink-3")}>{q ? fmtPct(q.changePct24h) : ""}</span>
@@ -295,7 +309,7 @@ function Watchlist() {
           )}
         </ul>
       )}
-      <Tooltip content="Crypto prices stream from Binance; spot XAU/USD is polled from Swissquote's public quote feed (Twelve Data when a key is configured).">
+      <Tooltip content="Crypto prices stream from Binance; spot XAU/USD and XAG/USD are polled from Swissquote's public quote feed (Twelve Data when a key is configured).">
         <span className="block px-4 py-2 text-[10.5px] text-ink-3 border-t border-line cursor-help">Streaming quotes · hover a source badge for details</span>
       </Tooltip>
     </Card>

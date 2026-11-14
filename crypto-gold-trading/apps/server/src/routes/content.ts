@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { EconEvent } from "@terminal/core";
 import { cache } from "../lib/cache";
 import { loadForexFactoryWeek, loadOfficialSchedule, mergeEvents } from "../providers/calendar";
-import { fetchAllNews, FEEDS, type NewsItem, type NewsTopic } from "../providers/news";
+import { fetchAllNews, FEEDS, type NewsFilter, type NewsItem, type NewsTopic } from "../providers/news";
 
 export async function getCalendar(from: number, to: number): Promise<{ events: EconEvent[]; sources: { provider: string; label: string; official: boolean; error?: string }[] }> {
   const res = await cache.getOrLoad("calendar:all", 60 * 60_000, async () => {
@@ -20,9 +20,10 @@ export async function getCalendar(from: number, to: number): Promise<{ events: E
   return { events: res.value.events.filter((e) => e.time >= from && e.time <= to), sources: res.value.sources };
 }
 
-export async function getNews(topic: NewsTopic | "all"): Promise<{ items: NewsItem[]; failed: string[]; fetchedAt: number; feeds: { publisher: string; topics: NewsTopic[] }[] }> {
+export async function getNews(topic: NewsFilter): Promise<{ items: NewsItem[]; failed: string[]; fetchedAt: number; feeds: { publisher: string; topics: NewsTopic[] }[] }> {
   const res = await cache.getOrLoad("news:all", 10 * 60_000, fetchAllNews);
-  const items = topic === "all" ? res.value.items : res.value.items.filter((i) => i.topics.includes(topic));
+  // No feed is about silver alone: its headlines are the ones the keyword rules tag, whichever feed they came from.
+  const items = topic === "all" ? res.value.items : topic === "silver" ? res.value.items.filter((i) => i.relevance.includes("silver")) : res.value.items.filter((i) => i.topics.includes(topic));
   return { items, failed: res.value.failed, fetchedAt: res.storedAt, feeds: FEEDS.map((f) => ({ publisher: f.publisher, topics: f.topics })) };
 }
 
@@ -47,7 +48,7 @@ export async function contentRoutes(app: FastifyInstance) {
 
   app.get("/api/news", async (req) => {
     const q = req.query as { topic?: string; limit?: string };
-    const topic = (["crypto", "gold", "macro"].includes(q.topic ?? "") ? q.topic : "all") as NewsTopic | "all";
+    const topic = (["crypto", "gold", "silver", "macro"].includes(q.topic ?? "") ? q.topic : "all") as NewsFilter;
     const res = await getNews(topic);
     const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? "60", 10) || 60));
     return { ...res, items: res.items.slice(0, limit) };

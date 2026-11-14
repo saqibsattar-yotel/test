@@ -8,7 +8,7 @@
  */
 import WebSocket from "ws";
 import type { AssetId, Quote } from "@terminal/core";
-import { CRYPTO_ASSETS } from "@terminal/core";
+import { CRYPTO_ASSETS, METAL_ASSETS, isMetalAsset } from "@terminal/core";
 import { assetIdsForBinanceSymbol, binanceSymbol } from "../providers/binance";
 import { logger } from "../lib/logger";
 import { market } from "../services/market";
@@ -21,7 +21,7 @@ export type HubMessage = { type: "quote"; quote: Quote } | { type: "quotes"; quo
 
 type Client = { send: (data: string) => void; readyState: number };
 
-const CORE: AssetId[] = [...CRYPTO_ASSETS, "XAUUSD"];
+const CORE: AssetId[] = [...CRYPTO_ASSETS, ...METAL_ASSETS];
 const MAX_STREAMS = 400;
 const IDLE_MS = 2 * 3_600_000;
 
@@ -190,14 +190,14 @@ class Hub {
     const poll = async () => {
       try {
         const all = this.trackedAssets();
-        // Spot gold has no exchange stream: always poll it (Swissquote / Twelve Data) alongside anything the stream is not covering.
-        const need = this.upstreamLive ? all.filter((a) => a === "XAUUSD") : all;
+        // Spot gold and silver have no exchange stream: always poll them (Swissquote / Twelve Data) alongside anything the stream is not covering.
+        const need = this.upstreamLive ? all.filter(isMetalAsset) : all;
         if (!need.length) return;
         const quotes = await market.getQuotes(need);
         for (const q of quotes) {
           const prev = this.latest.get(q.assetId);
-          // Gold never comes from the exchange stream, so a polled spot quote always wins.
-          if (!this.upstreamLive || !prev || q.assetId === "XAUUSD" || prev.source.quality === "demo") {
+          // The metals never come from the exchange stream, so a polled spot quote always wins.
+          if (!this.upstreamLive || !prev || isMetalAsset(q.assetId) || prev.source.quality === "demo") {
             const quality = !this.upstreamLive && q.source.quality === "live" ? "delayed" : q.source.quality;
             this.latest.set(q.assetId, { ...q, source: { ...q.source, quality } });
           }

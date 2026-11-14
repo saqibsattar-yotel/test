@@ -10,6 +10,7 @@ import { StatusBadge } from "@/components/setups/SetupCard";
 import { useAlerts, useFeatures, useJournalMutations, useSavedAnalyses, useSavedAnalysisMutations, useSavedSetupMutations, useSavedSetups, useSettings, useUpdateSettings } from "@/lib/queries";
 import { useUiNoQuotes } from "@/lib/store";
 import { cls, fmtDateTime, fmtPrice, setupTypeLabel } from "@/lib/format";
+import { METALS, METAL_SELECTED, isMetalAsset } from "@/lib/metals";
 
 export const WIDGETS: { id: string; label: string }[] = [
   { id: "tickers", label: "Headline quote tiles" },
@@ -107,7 +108,7 @@ export default function Settings() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {(Object.keys(ASSETS) as AssetId[]).map((a) => {
               const on = assets.includes(a);
-              return <button key={a} onClick={() => mark(setAssets)(on ? assets.filter((x) => x !== a) : [...assets, a])} className={cls("flex items-center justify-between rounded-lg border px-3 h-10 text-sm", on ? (a === "XAUUSD" ? "border-gold/50 bg-gold-soft text-ink-1" : "border-accent bg-accent-soft text-ink-1") : "border-line text-ink-2")}><span>{ASSETS[a].symbol}</span><span className="text-xs text-ink-3">{ASSETS[a].name}</span></button>;
+              return <button key={a} onClick={() => mark(setAssets)(on ? assets.filter((x) => x !== a) : [...assets, a])} className={cls("flex items-center justify-between rounded-lg border px-3 h-10 text-sm", on ? (isMetalAsset(a) ? `${METAL_SELECTED[METALS[a].metal]} text-ink-1` : "border-accent bg-accent-soft text-ink-1") : "border-line text-ink-2")}><span>{ASSETS[a].symbol}</span><span className="text-xs text-ink-3">{ASSETS[a].name}</span></button>;
             })}
           </div>
           <div className="mt-3 space-y-2">
@@ -136,6 +137,7 @@ export default function Settings() {
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Crypto prices & derivatives</span><Badge tone="bull">Binance public API (keyless) · Bybit/Coinbase fallback</Badge></li>
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Market cap & dominance</span><Badge tone="bull">CoinGecko free API</Badge></li>
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Gold spot</span><Badge tone="bull">{f?.goldSpot.provider?.startsWith("twelvedata") ? "Twelve Data + Dukascopy archive + Swissquote live" : "Dukascopy archive + Swissquote live (genuine spot XAU/USD, keyless)"}</Badge></li>
+            <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Silver spot</span><Badge tone="bull">{f?.silverSpot?.provider?.startsWith("twelvedata") ? "Twelve Data + Dukascopy archive + Swissquote live" : "Dukascopy archive + Swissquote live (genuine spot XAG/USD, keyless)"}</Badge></li>
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Treasury yields</span><Badge tone="neutral">{f?.macro.yields === "fred" ? "FRED (key)" : "home.treasury.gov (keyless)"}</Badge></li>
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Dollar index</span><Badge tone="bull">ICE DXY formula on bank FX quotes (Dukascopy archive + Swissquote live)</Badge></li>
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Economic calendar</span><Badge tone="neutral">Fed/BLS/BEA published schedules{f?.calendar.forexFactoryFeed ? " + Forex Factory weekly feed" : ""}</Badge></li>
@@ -143,7 +145,7 @@ export default function Settings() {
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">AI narratives</span>{f?.ai.enabled ? <Badge tone="accent">Claude · {f.ai.model}</Badge> : <Badge tone="neutral">Rule-based — set ANTHROPIC_API_KEY to enable Claude</Badge>}</li>
             <li className="flex items-start justify-between gap-3"><span className="text-ink-2">Demo mode</span><Badge tone={f?.demoMode === "force" ? "bear" : "neutral"}>{f?.demoMode}</Badge></li>
           </ul>
-          <p className="text-xs text-ink-3 mt-3">Edit <code className="text-ink-2">.env</code> (see <code className="text-ink-2">.env.example</code>) and restart the server. Optional keys unlock genuine XAU/USD spot, FRED macro series and Claude-written narratives; everything else runs keyless.</p>
+          <p className="text-xs text-ink-3 mt-3">Edit <code className="text-ink-2">.env</code> (see <code className="text-ink-2">.env.example</code>) and restart the server. Optional keys add Twelve Data as a further spot source for gold and silver, FRED macro series and Claude-written narratives; everything else, including genuine spot gold and silver, runs keyless.</p>
         </Card>
         <Card title="Alerts & monitoring" subtitle={`${alerts.data?.alerts.length ?? 0} rules · ${alerts.data?.triggered.filter((t) => !t.read).length ?? 0} unread`} actions={<Button size="sm" icon={<Bell className="h-3.5 w-3.5" />} onClick={() => ui.setAlertsOpen(true)}>Manage</Button>}>
           <p className="text-sm text-ink-2">Price, setup-status and regime-change alerts are evaluated on the server every 15 seconds and pushed over the live connection. Open the alerts panel (press <kbd className="text-ink-1">a</kbd>) to create or toggle rules.</p>

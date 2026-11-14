@@ -89,7 +89,7 @@ describe("WarmSeries", () => {
       n++;
       if (n === 1) return { value: "good", ttlMs: 1000 };
       throw new Error("archive unreachable");
-    }, 30_000);
+    }, { retryAfterFailureMs: 30_000 });
     await expect(series.get(2500)).resolves.toBe("good");
     await vi.advanceTimersByTimeAsync(1001);
     await expect(series.get(2500)).resolves.toBe("good"); // failed refresh → previous value
@@ -109,5 +109,113 @@ describe("WarmSeries", () => {
     expect(isWarming(err)).toBe(false);
     expect((err as Error).message).toBe("archive unreachable");
     expect(series.ready).toBe(false);
+  });
+
+  describe("first loads with gaps (some downloads failed)", () => {
+    it("holds a gappy first value back, rebuilds it on a timer and serves it once it is whole", async () => {
+      let n = 0;
+      const start = Date.now();
+      const series = new WarmSeries<string>("Gold history", async () => (++n < 3 ? { value: "gappy", ttlMs: 45_000, complete: false } : { value: "whole", ttlMs: 60_000 }), { partialAllowedAt: () => start + 240_000, rebuildMs: 10_000 });
+      const first = series.get(2500).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(isWarming(await first)).toBe(true);
+      expect(series.ready).toBe(false);
+      expect(series.loading).toBe(true); // a rebuild is scheduled without anyone asking
+      for (let i = 0; i < 5; i++) void series.get(100).catch(() => undefined); // impatient callers do not speed it up
+      await vi.advanceTimersByTimeAsync(100);
+      expect(n).toBe(1);
+      await vi.advanceTimersByTimeAsync(10_000 - 2600);
+      expect(n).toBe(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(n).toBe(3);
+      await expect(series.get(2500)).resolves.toBe("whole");
+      expect(series.incomplete).toBe(false);
+    });
+
+    it("serves the gappy value, flagged incomplete, once the patience window has passed", async () => {
+      let whole = false;
+      const start = Date.now();
+      const series = new WarmSeries<string>("Gold history", async () => (whole ? { value: "whole", ttlMs: 60_000 } : { value: "gappy", ttlMs: 45_000, complete: false }), { partialAllowedAt: () => start + 60_000, rebuildMs: 10_000 });
+      const waiting = series.get(Infinity);
+      await vi.advanceTimersByTimeAsync(59_000);
+      expect(series.ready).toBe(false);
+      await vi.advanceTimersByTimeAsync(2000);
+      await expect(waiting).resolves.toBe("gappy");
+      expect(series.incomplete).toBe(true);
+      whole = true; // the missing files arrive
+      await vi.advanceTimersByTimeAsync(45_001);
+      await series.get(2500);
+      await expect(series.get(2500)).resolves.toBe("whole");
+      expect(series.incomplete).toBe(false);
+    });
+
+    it("never serves a gappy first value when told not to", async () => {
+      let n = 0;
+      let whole = false;
+      const series = new WarmSeries<string>("Dollar index history", async () => (++n, whole ? { value: "whole", ttlMs: 60_000 } : { value: "gappy", ttlMs: 60_000, complete: false }), { partialAllowedAt: () => Infinity, rebuildMs: 20_000 });
+      const first = series.get(800).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(isWarming(await first)).toBe(true);
+      expect(series.ready).toBe(false);
+      expect(n).toBeGreaterThan(100); // it kept trying (the downloader decides what is really re-requested)
+      expect(n).toBeLessThanOrEqual(181); // …but only every 20 s
+      whole = true;
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(series.get(800)).resolves.toBe("whole");
+    });
+
+    it("keeps completing a value that was published with gaps, without anyone asking for it again", async () => {
+      let n = 0;
+      let whole = false;
+      const series = new WarmSeries<string>("Gold history", async () => (++n, whole ? { value: "whole", ttlMs: 60_000 } : { value: "gappy", ttlMs: 45_000, complete: false }), { partialAllowedAt: () => 0 });
+      await expect(series.get(2500)).resolves.toBe("gappy"); // published at once, flagged
+      expect(series.incomplete).toBe(true);
+      expect(n).toBe(1);
+      // Nobody asks again. It still retries once per lifetime of the gappy value: no faster, no slower.
+      await vi.advanceTimersByTimeAsync(44_000);
+      expect(n).toBe(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(n).toBe(2);
+      await vi.advanceTimersByTimeAsync(45_000 * 3);
+      expect(n).toBe(5);
+      whole = true; // the missing files arrive
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(series.incomplete).toBe(false);
+      expect(series.peek()).toBe("whole");
+      const builds = n;
+      await vi.advanceTimersByTimeAsync(10 * 60_000); // a whole value is left alone until someone needs it
+      expect(n).toBe(builds);
+    });
+
+    it("keeps trying to complete a gappy value when a rebuild itself fails", async () => {
+      let n = 0;
+      let mode: "gappy" | "broken" | "whole" = "gappy";
+      const series = new WarmSeries<string>("Gold history", async () => {
+        n++;
+        if (mode === "broken") throw new Error("archive unreachable");
+        return mode === "whole" ? { value: "whole", ttlMs: 60_000 } : { value: "gappy", ttlMs: 45_000, complete: false };
+      }, { partialAllowedAt: () => 0, retryAfterFailureMs: 30_000 });
+      await series.get(2500);
+      mode = "broken";
+      await vi.advanceTimersByTimeAsync(46_000);
+      expect(n).toBe(2);
+      expect(series.peek()).toBe("gappy"); // the last value stays
+      expect(series.lastError?.message).toBe("archive unreachable");
+      mode = "whole";
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(series.peek()).toBe("whole");
+      expect(series.incomplete).toBe(false);
+      series.dispose();
+    });
+
+    it("keeps a refreshed series usable when a new file is missing, and says so", async () => {
+      let n = 0;
+      const series = new WarmSeries<string>("Gold history", async () => (++n === 1 ? { value: "v1", ttlMs: 1000 } : { value: "v2 without the newest hour", ttlMs: 45_000, complete: false }), { partialAllowedAt: () => Infinity });
+      await expect(series.get(2500)).resolves.toBe("v1");
+      await vi.advanceTimersByTimeAsync(1001);
+      await series.get(2500);
+      await expect(series.get(2500)).resolves.toBe("v2 without the newest hour");
+      expect(series.incomplete).toBe(true);
+    });
   });
 });

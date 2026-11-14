@@ -188,8 +188,10 @@ export function computePerformance(trades: JournalTrade[], opts: { includeTestDa
   };
   const bySetup = by((t) => t.setupType);
   const byAsset = by((t) => t.symbol);
-  const crypto = closed.filter((t) => t.assetClass === "crypto");
-  const gold = closed.filter((t) => t.assetClass === "gold");
+  const classStats = (assetClass: AssetClass): SetupStats | null => {
+    const trades = closed.filter((t) => t.assetClass === assetClass);
+    return trades.length ? groupStats(assetClass, trades) : null;
+  };
   const qualified = bySetup.filter((s) => s.trades >= 3);
   return {
     totalTrades: all.length,
@@ -219,7 +221,7 @@ export function computePerformance(trades: JournalTrade[], opts: { includeTestDa
     monthly,
     bySetup,
     byAsset,
-    byClass: { crypto: crypto.length ? groupStats("crypto", crypto) : null, gold: gold.length ? groupStats("gold", gold) : null },
+    byClass: { crypto: classStats("crypto"), gold: classStats("gold"), silver: classStats("silver") },
     bestSetups: qualified.slice(0, 3),
     worstSetups: [...qualified].sort((a, b) => a.totalPnl - b.totalPnl).slice(0, 3),
     includesTestData: !!opts.includeTestData && all.some((t) => t.isTestData),

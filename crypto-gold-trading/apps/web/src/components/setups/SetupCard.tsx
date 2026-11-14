@@ -8,6 +8,7 @@ import { Badge, Button, Meter, SourceBadge, Tooltip, type Tone } from "@/compone
 import { RRLadder } from "@/components/charts/RRLadder";
 import { cls, fmtMoney, fmtPrice, fmtUntil, setupTypeLabel, statusTone } from "@/lib/format";
 import { useUi } from "@/lib/store";
+import { METAL_GLYPH, METAL_SOFT, metalOf } from "@/lib/metals";
 import { useSavedSetupMutations, useUpdateWatchlist, useWatchlist } from "@/lib/queries";
 
 export function tradePlanText(s: TradeSetup, currency = "USD"): string {
@@ -44,10 +45,10 @@ export function StatusBadge({ status, size = "md" }: { status: TradeSetup["statu
 
 export function AssetGlyph({ assetId, size = 32 }: { assetId: TradeSetup["assetId"]; size?: number }) {
   const meta = resolveAsset(assetId);
-  const gold = meta.assetClass === "gold";
+  const metal = metalOf(assetId);
   return (
-    <span className={cls("inline-flex items-center justify-center rounded-lg font-bold shrink-0", gold ? "bg-gold-soft text-gold" : "bg-accent-soft text-accent")} style={{ width: size, height: size, fontSize: size * 0.36 }} aria-hidden>
-      {meta.base.slice(0, gold ? 2 : 3)}
+    <span className={cls("inline-flex items-center justify-center rounded-lg font-bold shrink-0", metal ? METAL_SOFT[metal] : "bg-accent-soft text-accent")} style={{ width: size, height: size, fontSize: size * 0.36 }} aria-hidden>
+      {metal ? METAL_GLYPH[metal] : meta.base.slice(0, 3)}
     </span>
   );
 }

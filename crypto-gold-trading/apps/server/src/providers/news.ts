@@ -10,6 +10,8 @@ import { logger } from "../lib/logger";
 const log = logger("news");
 
 export type NewsTopic = "crypto" | "gold" | "macro";
+/** What the news endpoint can be filtered by: a feed topic, or headlines the keyword rules tag as silver. */
+export type NewsFilter = NewsTopic | "silver" | "all";
 
 export interface NewsItem {
   id: string;
@@ -19,8 +21,8 @@ export interface NewsItem {
   publisher: string;
   topics: NewsTopic[];
   summary: string | null;
-  /** Rule-based relevance tags for gold/BTC. */
-  relevance: ("gold" | "btc" | "eth" | "crypto" | "fed" | "usd" | "geopolitics")[];
+  /** Rule-based relevance tags (keyword rules on the title and summary). */
+  relevance: ("gold" | "silver" | "btc" | "eth" | "crypto" | "fed" | "usd" | "geopolitics")[];
 }
 
 interface FeedDef {
@@ -72,6 +74,8 @@ export function tagNews(title: string, summary: string): NewsItem["relevance"] {
   const s = `${title} ${summary}`.toLowerCase();
   const out: NewsItem["relevance"] = [];
   if (/\bgold\b|xau|bullion|precious metal/.test(s)) out.push("gold");
+  // "silver" as a word (not Silvergate, not a surname prefix), the XAG code, or the metals as a group.
+  if (/\bsilver\b|\bxag|precious metal/.test(s)) out.push("silver");
   if (/bitcoin|\bbtc\b/.test(s)) out.push("btc");
   if (/ethereum|\beth\b/.test(s)) out.push("eth");
   if (/crypto|altcoin|stablecoin|defi|solana|xrp|binance|coinbase/.test(s) || out.includes("btc") || out.includes("eth")) out.push("crypto");

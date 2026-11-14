@@ -37,7 +37,7 @@ export function AlertsDrawer() {
                   {a.kind === "price_above" && `${L(a.assetId!).symbol} above ${fmtPrice(a.level, a.assetId)}`}
                   {a.kind === "price_below" && `${L(a.assetId!).symbol} below ${fmtPrice(a.level, a.assetId)}`}
                   {a.kind === "setup_status" && `${L(a.assetId!).symbol} ${a.timeframe ?? "4h"} setup becomes actionable`}
-                  {a.kind === "regime_change" && "Crypto regime / gold posture zone change"}
+                  {a.kind === "regime_change" && "Crypto regime, gold or silver posture zone change"}
                 </div>
                 <div className="text-[11px] text-ink-3">
                   {a.triggerCount} trigger{a.triggerCount === 1 ? "" : "s"}

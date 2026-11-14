@@ -49,7 +49,7 @@ export default function Backtest() {
               <option value="tp3">Full exit at TP3</option>
             </Select>
           </Field>
-          <Field label="Fees (bps per side)" hint="Binance spot taker ≈ 10 bps, maker ≈ 10; VIP tiers lower. Gold CFD: use spread/2 in bps.">
+          <Field label="Fees (bps per side)" hint="Binance spot taker ≈ 10 bps, maker ≈ 10; VIP tiers lower. Gold or silver CFD: use spread/2 in bps.">
             <Input type="number" value={req.feesBps} onChange={(e) => set("feesBps", parseFloat(e.target.value) || 0)} />
           </Field>
           <Field label="Slippage (bps on market fills)">

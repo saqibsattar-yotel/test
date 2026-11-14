@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { CRYPTO_ASSETS, TIMEFRAMES, type AssetId, type Timeframe } from "@terminal/core";
+import { CRYPTO_ASSETS, METAL_ASSETS, TIMEFRAMES, type AssetId, type Timeframe } from "@terminal/core";
 import { market, CANDLE_LIMITS } from "../services/market";
 import { liquidations } from "../services/liquidations";
 import { assets } from "../services/assets";
@@ -17,7 +17,7 @@ export function parseAssets(raw: unknown, fallback: AssetId[]): AssetId[] {
 export async function marketRoutes(app: FastifyInstance) {
   app.get("/api/market/quotes", async (req) => {
     const q = req.query as { assets?: string };
-    const ids = parseAssets(q.assets, [...CRYPTO_ASSETS, "XAUUSD"]);
+    const ids = parseAssets(q.assets, [...CRYPTO_ASSETS, ...METAL_ASSETS]);
     hub.ensureSubscribed(ids);
     return { quotes: await market.getQuotes(ids), generatedAt: Date.now() };
   });

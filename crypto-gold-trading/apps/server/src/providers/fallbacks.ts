@@ -3,7 +3,7 @@
  * Bybit: klines + tickers + funding/OI. Coinbase Exchange: spot candles + ticker.
  */
 import type { AssetId, Candle, DataSource, Quote, Timeframe } from "@terminal/core";
-import { assetBase } from "@terminal/core";
+import { assetBase, isMetalAsset } from "@terminal/core";
 import { fetchJson } from "../lib/http";
 import type { CandleProvider, CandleResult, DerivativesProvider, FundingInfo, OpenInterestInfo, QuoteProvider } from "./types";
 import { ProviderError } from "./types";
@@ -17,7 +17,7 @@ export class BybitProvider implements CandleProvider, QuoteProvider, Derivatives
     return `${assetBase(assetId)}USDT`;
   }
   supports(assetId: AssetId): boolean {
-    return assetId !== "XAUUSD";
+    return !isMetalAsset(assetId);
   }
   async getCandles(assetId: AssetId, timeframe: Timeframe, limit: number): Promise<CandleResult> {
     const symbol = this.symbol(assetId);
@@ -41,7 +41,7 @@ export class BybitProvider implements CandleProvider, QuoteProvider, Derivatives
   async getFunding(assetIds: AssetId[]): Promise<FundingInfo[]> {
     const out: FundingInfo[] = [];
     for (const assetId of assetIds) {
-      if (assetId === "XAUUSD") continue;
+      if (isMetalAsset(assetId)) continue;
       const symbol = this.symbol(assetId);
       const url = `${BYBIT}/v5/market/tickers?category=linear&symbol=${symbol}`;
       try {
@@ -75,7 +75,7 @@ const CB_GRAN: Partial<Record<Timeframe, number>> = { "5m": 300, "15m": 900, "1h
 export class CoinbaseProvider implements CandleProvider, QuoteProvider {
   readonly id = "coinbase";
   supports(assetId: AssetId): boolean {
-    return assetId !== "XAUUSD" && assetId !== "BNBUSD";
+    return !isMetalAsset(assetId) && assetId !== "BNBUSD";
   }
   async getCandles(assetId: AssetId, timeframe: Timeframe, limit: number): Promise<CandleResult> {
     const gran = CB_GRAN[timeframe];

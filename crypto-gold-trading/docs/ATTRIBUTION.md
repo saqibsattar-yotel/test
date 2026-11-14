@@ -5,12 +5,12 @@ This project studies and adapts methodology from **tradermonty/claude-trading-sk
 Copyright (c) 2026 TraderMonty. The MIT notice is reproduced below as required.
 
 Nothing was copied verbatim; the concepts below were re-implemented in TypeScript for
-crypto and gold markets. Where thresholds or weights were preserved they are noted.
+crypto, gold and silver markets. Where thresholds or weights were preserved they are noted.
 
 | Reference skill | Where it lives here | What was kept / adapted |
 |---|---|---|
 | `crypto-regime-analyzer` | `packages/core/src/regime/crypto.ts` | The 6-component model, weights (25/20/15/15/15/10), every threshold table, proportional weight redistribution and the fail-closed UNKNOWN rule (≥4 components, ≥65% weight). Adapted: a BTC/alt-basket relative-strength proxy supplies dominance *direction* until 31 real dominance observations accumulate; the result is labelled when the proxy is used. |
-| `position-sizer` / `futures-position-sizer` | `packages/core/src/risk/index.ts` | Fixed-fractional risk budget, floor-never-round-up quantity, multiplier/tick awareness, hard tick-grid rejection for exchange futures, `NO_TRADE` when the budget cannot afford one unit, static margin note for futures. Contract specs for GC (100 oz, 0.10 tick) and CME BTC (5 BTC, $5 tick) reuse the reference table's verified values (2026-07-17). Added: XAU CFD lots, micro contracts, perpetual leverage/liquidation estimate, account-currency conversion. |
+| `position-sizer` / `futures-position-sizer` | `packages/core/src/risk/index.ts` | Fixed-fractional risk budget, floor-never-round-up quantity, multiplier/tick awareness, hard tick-grid rejection for exchange futures, `NO_TRADE` when the budget cannot afford one unit, static margin note for futures. Contract specs for GC (100 oz, 0.10 tick) and CME BTC (5 BTC, $5 tick) reuse the reference table's verified values (2026-07-17). Added: XAU and XAG CFD lots, micro contracts, perpetual leverage/liquidation estimate, account-currency conversion. The COMEX silver specifications (SI 5,000 oz and SIL 1,000 oz, $0.005 tick) are not from the reference table; SI was checked against the COMEX rulebook (chapter 112) on 2026-11-14. |
 | `pre-trade-discipline-gate` | `packages/core/src/risk/gate.ts` | GO / NO_GO / REVIEW_REQUIRED decision model, written-plan/stop/size checks, planned-vs-actual risk, revenge window, regime and circuit-breaker inputs. |
 | `drawdown-circuit-breaker` | `packages/core/src/risk/gate.ts` | Default rules (daily −2% halt, 2 consecutive losers → 24h cooldown, weekly −5%, monthly −8%), strictest-state-wins ordering. Accounting zone is configurable (UTC default for 24/7 crypto). |
 | `technical-analyst` | `packages/core/src/mtf`, `packages/core/src/structure` | Trend classification by HH/HL/LH/LL, S/R significance by touches and recency, MA alignment and slope, volume confirmation, scenario framing with explicit invalidation levels. Re-cast as a multi-timeframe engine for intraday-to-weekly data. |
@@ -26,9 +26,12 @@ crypto and gold markets. Where thresholds or weights were preserved they are not
 
 ## Data sources
 
-Binance public market data, CoinGecko free API, alternative.me Fear & Greed, US Treasury
-daily yield-curve feeds, ECB reference rates via Frankfurter, Forex Factory weekly
-calendar feed, publisher RSS feeds, and optionally Twelve Data, FRED and the Anthropic API.
+Binance public market data, CoinGecko free API, alternative.me Fear & Greed, the Dukascopy
+historical data feed (spot gold, spot silver and FX history), Swissquote's public quote feed
+(live spot gold, spot silver and FX), gold-api.com (independent spot cross-check for gold and
+silver), US Treasury daily yield-curve feeds, ECB reference rates via Frankfurter, Forex
+Factory weekly calendar feed, publisher RSS feeds, and optionally Twelve Data, FRED and the
+Anthropic API.
 Each payload in the UI names its provider and timestamp. Check each provider's terms for
 your own deployment.
 

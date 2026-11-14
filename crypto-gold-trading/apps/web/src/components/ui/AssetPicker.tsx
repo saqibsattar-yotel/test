@@ -3,6 +3,8 @@ import { Search } from "lucide-react";
 import { Badge } from "@/components/ui";
 import { searchAssets, useAssets, type AssetInfo } from "@/lib/assets";
 import { cls } from "@/lib/format";
+import { isMetalClass } from "@terminal/core";
+import { METAL_CHIP, METAL_SOFT } from "@/lib/metals";
 
 /**
  * Searchable combobox over the live asset universe. Type a ticker or name (POL, ENA,
@@ -70,10 +72,10 @@ export function AssetPicker({ value, onSelect, placeholder = "Search any coin �
         <div role="listbox" className="absolute z-50 mt-1 w-full min-w-[280px] max-h-80 overflow-y-auto card shadow-2xl fade-in">
           {assets.isLoading && <p className="px-3 py-3 text-xs text-ink-3">Loading universe…</p>}
           {assets.isError && <p className="px-3 py-3 text-xs text-bear">Could not load the asset list.</p>}
-          {!assets.isLoading && results.length === 0 && <p className="px-3 py-3 text-xs text-ink-3">No match for “{q}”. The universe is Binance USDT spot pairs plus XAU/USD.</p>}
+          {!assets.isLoading && results.length === 0 && <p className="px-3 py-3 text-xs text-ink-3">No match for “{q}”. The universe is Binance USDT spot pairs plus spot gold (XAU/USD) and silver (XAG/USD).</p>}
           {results.map((a, i) => (
             <button key={a.id} role="option" aria-selected={i === idx} onMouseEnter={() => setIdx(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => choose(a)} className={cls("w-full flex items-center gap-2.5 px-3 h-10 text-left", i === idx ? "bg-surface-3" : "")}>
-              <span className={cls("inline-flex h-7 w-7 items-center justify-center rounded-md text-[11px] font-bold shrink-0", a.assetClass === "gold" ? "bg-gold-soft text-gold" : "bg-accent-soft text-accent")}>{a.base.slice(0, 3)}</span>
+              <span className={cls("inline-flex h-7 w-7 items-center justify-center rounded-md text-[11px] font-bold shrink-0", isMetalClass(a.assetClass) ? METAL_SOFT[a.assetClass] : "bg-accent-soft text-accent")}>{a.base.slice(0, 3)}</span>
               <span className="min-w-0 flex-1">
                 <span className="block text-sm text-ink-1 truncate">
                   {a.symbol} <span className="text-ink-3">· {a.name}</span>
@@ -99,9 +101,9 @@ export function AssetPicker({ value, onSelect, placeholder = "Search any coin �
 }
 
 /** Removable chip for a selected asset. */
-export function AssetChip({ id, label, tone = "accent", onRemove, onClick, active = true }: { id: string; label: string; tone?: "accent" | "gold"; onRemove?: () => void; onClick?: () => void; active?: boolean }) {
+export function AssetChip({ id, label, tone = "accent", onRemove, onClick, active = true }: { id: string; label: string; tone?: "accent" | "gold" | "silver"; onRemove?: () => void; onClick?: () => void; active?: boolean }) {
   return (
-    <span className={cls("inline-flex items-center gap-1 h-7 rounded-md border px-2 text-xs font-medium", active ? (tone === "gold" ? "border-gold/40 bg-gold-soft text-gold" : "border-accent/40 bg-accent-soft text-accent") : "border-line text-ink-3")} data-asset={id}>
+    <span className={cls("inline-flex items-center gap-1 h-7 rounded-md border px-2 text-xs font-medium", active ? (tone === "accent" ? "border-accent/40 bg-accent-soft text-accent" : METAL_CHIP[tone]) : "border-line text-ink-3")} data-asset={id}>
       <button onClick={onClick} className="focus:outline-none">
         {label}
       </button>

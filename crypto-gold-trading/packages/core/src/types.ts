@@ -19,10 +19,10 @@ export const TIMEFRAME_MS: Record<Timeframe, number> = {
   "1w": 7 * 24 * 60 * 60_000,
 };
 
-export type AssetClass = "crypto" | "gold";
+export type AssetClass = "crypto" | "gold" | "silver";
 
 /**
- * Asset identifiers are canonical `<BASE>USD` strings (BTCUSD, POLUSD, ENAUSD, XAUUSD).
+ * Asset identifiers are canonical `<BASE>USD` strings (BTCUSD, POLUSD, ENAUSD, XAUUSD, XAGUSD).
  * A curated core set carries hand-tuned metadata below; any other id is resolved on the fly
  * with `resolveAsset`, and the server validates ids against the live exchange universe.
  */
@@ -33,12 +33,12 @@ export interface AssetMeta {
   symbol: string; // display symbol e.g. "BTC/USD"
   name: string;
   assetClass: AssetClass;
-  base: string; // BTC, XAU
+  base: string; // BTC, XAU, XAG
   quote: string; // USD
   pricePrecision: number; // decimals for display
   /** Approximate typical "round number" step for psychological levels. */
   roundStep: number;
-  /** True when the instrument trades continuously (crypto) vs. with session closes (gold). */
+  /** True when the instrument trades continuously (crypto) vs. with session closes (gold, silver). */
   continuous: boolean;
 }
 
@@ -53,9 +53,56 @@ export const ASSETS: Record<string, AssetMeta> = {
   AVAXUSD: { id: "AVAXUSD", symbol: "AVAX/USD", name: "Avalanche", assetClass: "crypto", base: "AVAX", quote: "USD", pricePrecision: 2, roundStep: 5, continuous: true },
   LINKUSD: { id: "LINKUSD", symbol: "LINK/USD", name: "Chainlink", assetClass: "crypto", base: "LINK", quote: "USD", pricePrecision: 3, roundStep: 1, continuous: true },
   XAUUSD: { id: "XAUUSD", symbol: "XAU/USD", name: "Gold (spot)", assetClass: "gold", base: "XAU", quote: "USD", pricePrecision: 2, roundStep: 50, continuous: false },
+  XAGUSD: { id: "XAGUSD", symbol: "XAG/USD", name: "Silver (spot)", assetClass: "silver", base: "XAG", quote: "USD", pricePrecision: 3, roundStep: 1, continuous: false },
 };
 
 export const CRYPTO_ASSETS: AssetId[] = ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "ADAUSD", "DOGEUSD", "AVAXUSD", "LINKUSD"];
+
+/**
+ * Spot precious metals. They are OTC markets with sessions and a weekend close, served by the metals
+ * data service (bank quotes and an archive), never by a crypto exchange or a tokenised stand-in.
+ */
+export type Metal = "gold" | "silver";
+export type MetalId = "XAUUSD" | "XAGUSD";
+
+export interface MetalInfo {
+  id: MetalId;
+  /** Also the asset class, the URL segment (/gold, /silver) and the key in API payloads. */
+  metal: Metal;
+  /** "Gold" / "Silver", for the start of a sentence or a title. */
+  title: string;
+  /** ISO 4217 code: XAU, XAG. */
+  code: string;
+  /** "XAU/USD": the pair as quoted, also the instrument name on the quote feed. */
+  pair: string;
+  /** Troy ounces in one standard lot at most retail brokers, and in one COMEX contract. */
+  standardLotOz: number;
+}
+
+export const METALS: Record<MetalId, MetalInfo> = {
+  XAUUSD: { id: "XAUUSD", metal: "gold", title: "Gold", code: "XAU", pair: "XAU/USD", standardLotOz: 100 },
+  XAGUSD: { id: "XAGUSD", metal: "silver", title: "Silver", code: "XAG", pair: "XAG/USD", standardLotOz: 5000 },
+};
+
+/** Gold first: it is loaded and listed first wherever both metals appear. */
+export const METAL_ASSETS: MetalId[] = ["XAUUSD", "XAGUSD"];
+
+export function isMetalAsset(id: string): id is MetalId {
+  return id === "XAUUSD" || id === "XAGUSD";
+}
+
+export function isMetalClass(assetClass: string | null | undefined): assetClass is Metal {
+  return assetClass === "gold" || assetClass === "silver";
+}
+
+/** The spot instrument of a metal: gold -> XAUUSD, silver -> XAGUSD. */
+export function metalAssetId(metal: Metal): MetalId {
+  return metal === "silver" ? "XAGUSD" : "XAUUSD";
+}
+
+export function metalInfo(metal: Metal | MetalId): MetalInfo {
+  return METALS[metal === "gold" || metal === "silver" ? metalAssetId(metal) : metal];
+}
 
 const ASSET_ID_RE = /^[A-Z0-9]{2,15}USD$/;
 
@@ -68,7 +115,7 @@ export function isCoreAsset(id: string): boolean {
   return Object.prototype.hasOwnProperty.call(ASSETS, id);
 }
 
-/** Base ticker for an id: BTCUSD -> BTC, XAUUSD -> XAU. */
+/** Base ticker for an id: BTCUSD -> BTC, XAUUSD -> XAU, XAGUSD -> XAG. */
 export function assetBase(id: string): string {
   return id.replace(/USD$/, "");
 }
@@ -136,6 +183,8 @@ export interface DataSource {
   quality: DataQuality;
   /** True if this is a stand-in instrument (e.g. PAXG for XAU) — the UI must say so. */
   proxy?: boolean;
+  /** True if part of the history could not be loaded yet: the series has gaps and must not drive decisions. */
+  incomplete?: boolean;
   /** Explicit, honest note about limitations ("ECB reference rates, daily, 16:00 CET"). */
   note?: string;
   url?: string;
@@ -144,8 +193,12 @@ export interface DataSource {
 export interface Quote {
   assetId: AssetId;
   price: number;
-  change24h: number; // absolute
-  changePct24h: number; // percent
+  /**
+   * Change against the reference price: 24 hours ago for crypto, the previous close for spot metals.
+   * Null when that reference price is not known (never a made-up zero).
+   */
+  change24h: number | null; // absolute
+  changePct24h: number | null; // percent
   high24h?: number;
   low24h?: number;
   volume24hBase?: number;

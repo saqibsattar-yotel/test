@@ -13,6 +13,7 @@ export default {
         bull: "var(--bull)",
         bear: "var(--bear)",
         gold: "var(--gold)",
+        silver: "var(--silver)",
         warn: "var(--warning)",
         crit: "var(--critical)",
       },

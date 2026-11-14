@@ -31,7 +31,7 @@ export interface Narrative {
 
 const DISCLAIMER = "Research output for human review — not financial advice, not a signal, not an execution instruction. Numbers come from verified market data and deterministic calculations; the narrative is an interpretation and can be wrong.";
 
-const SYSTEM = `You are the narrative layer of a crypto and gold trading research terminal.
+const SYSTEM = `You are the narrative layer of a crypto, gold and silver trading research terminal.
 
 You will receive a FACT SHEET (JSON) produced by deterministic code from verified market data: prices, indicators, structure levels, regime scores, trade-plan levels and evidence lists.
 
@@ -106,7 +106,7 @@ export function ruleBasedNarrative(paragraphs: string[], factsAsOf: number | nul
 }
 
 export interface NarrativeRequest {
-  kind: "setup" | "briefing" | "mtf" | "regime" | "gold" | "news";
+  kind: "setup" | "briefing" | "mtf" | "regime" | "gold" | "silver" | "news";
   facts: unknown;
   fallback: string[]; // rule-based paragraphs
   factsAsOf: number | null;

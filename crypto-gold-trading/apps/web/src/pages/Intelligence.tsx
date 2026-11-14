@@ -2,13 +2,14 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ChevronDown, ExternalLink } from "lucide-react";
 import type { EconEvent } from "@terminal/core";
-import { Badge, Card, DataNotice, Disclaimer, EmptyState, PageHeader, Segmented, SkeletonBlock, SourceBadge, Sparkline, Stat, Tabs, Toggle, Tooltip } from "@/components/ui";
+import { Badge, Card, DataNotice, Disclaimer, EmptyState, Meter, PageHeader, Segmented, SkeletonBlock, SourceBadge, Sparkline, Stat, Tabs, Toggle, Tooltip } from "@/components/ui";
 import { LiquidationTimeline } from "@/components/charts/Performance";
 import { RegimeMeter } from "@/components/charts/RegimeMeter";
 import { useCalendar, useIntel, useNews } from "@/lib/queries";
 import { useUi } from "@/lib/store";
 import { cls, fmtAge, fmtCompact, fmtDate, fmtDateTime, fmtNum, fmtPct, fmtSigned, fmtTime, fmtUntil, fmtWeekday } from "@/lib/format";
 import type { MacroSeries } from "@/lib/api";
+import { rankAmongCloses } from "@/lib/metals";
 
 type Tab = "crypto" | "gold" | "calendar" | "news";
 
@@ -18,8 +19,8 @@ export default function Intelligence() {
   const setTab = (t: Tab) => setParams({ tab: t });
   return (
     <div className="space-y-4">
-      <PageHeader title="Market Intelligence" description="Crypto positioning and structure, gold macro drivers, the economic calendar and news — each with a plain explanation of why it matters. Timestamps and sources on everything." />
-      <Tabs tabs={[{ value: "crypto", label: "Crypto" }, { value: "gold", label: "Gold & macro" }, { value: "calendar", label: "Economic calendar" }, { value: "news", label: "News" }]} value={tab} onChange={setTab} />
+      <PageHeader title="Market Intelligence" description="Crypto positioning and structure, gold and silver macro drivers, the economic calendar and news — each with a plain explanation of why it matters. Timestamps and sources on everything." />
+      <Tabs tabs={[{ value: "crypto", label: "Crypto" }, { value: "gold", label: "Gold, silver & macro" }, { value: "calendar", label: "Economic calendar" }, { value: "news", label: "News" }]} value={tab} onChange={setTab} />
       {tab === "crypto" && <CryptoIntel />}
       {tab === "gold" && <GoldIntel />}
       {tab === "calendar" && <Calendar />}
@@ -167,16 +168,18 @@ function GoldIntel() {
   const intel = useIntel();
   const tz = useUi((s) => s.timezone);
   const g = intel.data?.gold;
+  const sv = intel.data?.silver;
   if (intel.isLoading) return <SkeletonBlock lines={8} />;
-  if (!g) return <EmptyState title="Intelligence unavailable" description={(intel.error as Error)?.message} />;
+  if (!g || !sv) return <EmptyState title="Intelligence unavailable" description={(intel.error as Error)?.message} />;
+  const ratio = sv.ratio;
   return (
     <div className="grid lg:grid-cols-2 gap-4">
       <MacroCard s={g.dollar} title="US dollar" why={g.why.dollar} invert />
       <MacroCard s={g.yields.real10y} title="Real yields (10y TIPS)" why={g.why.yields} invert />
-      <MacroCard s={g.yields.tenYear} title="10-year Treasury yield" why="Nominal yields drive the dollar and the discount rate; real yields (above) matter more for gold." invert />
-      <MacroCard s={g.yields.curve} title="2s10s curve" why="A steepening curve after inversion has historically coincided with easing cycles — supportive for gold; it is context, not a trigger." />
+      <MacroCard s={g.yields.tenYear} title="10-year Treasury yield" why="Nominal yields drive the dollar and the discount rate; real yields (above) matter more for gold and silver." invert />
+      <MacroCard s={g.yields.curve} title="2s10s curve" why="A steepening curve after inversion has historically coincided with easing cycles — supportive for gold and silver; it is context, not a trigger." />
       {g.yields.errors.length > 0 && <DataNotice warnings={g.yields.errors} className="lg:col-span-2" />}
-      <Card title="Scheduled macro releases" subtitle={`Gold/rates-relevant · ${tz}`}>
+      <Card title="Scheduled macro releases" subtitle={`Gold, silver and rates-relevant · ${tz}`}>
         {g.macroReleases.length ? (
           <ul className="space-y-2 text-xs">
             {g.macroReleases.map((e) => (
@@ -192,15 +195,44 @@ function GoldIntel() {
         ) : <p className="text-xs text-ink-3">No scheduled releases in the window.</p>}
         <Why text={g.why.macro} />
       </Card>
+      <Card title="Gold/silver ratio" subtitle="Spot XAU/USD ÷ spot XAG/USD" source={ratio?.source}>
+        {ratio && ratio.value !== null ? (
+          <div className="space-y-2 text-xs">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <div className="text-2xl font-semibold tabular text-ink-1">{fmtNum(ratio.value, 2)}</div>
+                <div className="text-[10.5px] text-ink-3">ounces of silver per ounce of gold · as of {fmtDateTime(ratio.ts, tz)}</div>
+              </div>
+              {ratio.year?.change20dPct !== null && ratio.year?.change20dPct !== undefined && <span className="tabular text-ink-2">{fmtPct(ratio.year.change20dPct, 1)} / 20d</span>}
+            </div>
+            {ratio.year ? (
+              <>
+                <Meter value={ratio.year.percentile * 100} tone="accent" label="Position in the one-year range" />
+                <p className="text-ink-2">
+                  Last {ratio.year.days} daily closes: <span className="tabular text-ink-1">{fmtNum(ratio.year.low, 1)}</span> to <span className="tabular text-ink-1">{fmtNum(ratio.year.high, 1)}</span>. Today is <span className="text-ink-1">{rankAmongCloses(ratio.year.percentile, ratio.year.days)}</span>.
+                </p>
+              </>
+            ) : (
+              <p className="text-ink-3">The one-year range appears once both daily histories are loaded.</p>
+            )}
+          </div>
+        ) : <p className="text-xs text-ink-3">Needs both spot quotes; one of them is unavailable right now.</p>}
+        <Why text={sv.why.ratio} />
+      </Card>
       <Card title="Gold posture" subtitle="Composite with component breakdown">
         {g.posture ? <RegimeMeter score={g.posture.score} zone={g.posture.zone} components={g.posture.components} /> : <p className="text-xs text-ink-3">Unavailable</p>}
       </Card>
+      <Card title="Silver posture" subtitle="The same composite, on silver's own prices">
+        {sv.posture ? <RegimeMeter score={sv.posture.score} zone={sv.posture.zone} components={sv.posture.components} /> : <p className="text-xs text-ink-3">Unavailable</p>}
+        <Why text={sv.why.drivers} />
+      </Card>
       <Card title="Federal Reserve" subtitle="Press releases and Fed-tagged headlines"><NewsList items={g.fed} /></Card>
       <Card title="Geopolitical developments" subtitle="Headlines tagged by keyword rule"><NewsList items={g.geopolitics} /></Card>
-      <Card title="Gold demand & positioning" className="lg:col-span-2">
-        <EmptyState compact title="Not available without a dedicated provider" description={g.positioning.note} />
+      <Card title="Gold & silver demand and positioning" className="lg:col-span-2">
+        <EmptyState compact title="Not available without a dedicated provider" description={`${g.positioning.note} ${sv.positioning.note}`} />
       </Card>
-      <Card title="Gold headlines" className="lg:col-span-2"><NewsList items={g.goldNews} /></Card>
+      <Card title="Gold headlines"><NewsList items={g.goldNews} /></Card>
+      <Card title="Silver headlines" subtitle="Tagged by keyword rule, whichever feed they came from"><NewsList items={sv.silverNews} /></Card>
     </div>
   );
 }
@@ -219,7 +251,7 @@ function NewsList({ items }: { items: { id: string; title: string; link: string;
           <div className="text-[10.5px] text-ink-3 mt-0.5 flex gap-1.5 flex-wrap">
             <span className="text-ink-2">{n.publisher}</span>
             <span>· {fmtAge(n.publishedAt)}</span>
-            {n.relevance.map((r) => <span key={r} className={cls(r === "gold" && "text-gold", r === "btc" && "text-accent", r === "fed" && "text-warn")}>· {r}</span>)}
+            {n.relevance.map((r) => <span key={r} className={cls(r === "gold" && "text-gold", r === "silver" && "text-silver", r === "btc" && "text-accent", r === "fed" && "text-warn")}>· {r}</span>)}
           </div>
         </li>
       ))}
@@ -240,7 +272,7 @@ function Calendar() {
     if (range === "7") return { from: now - 2 * 3600_000, to: now + 7 * day };
     return { from: now - 2 * 3600_000, to: now + 30 * day };
   }, [range, now]);
-  const cal = useCalendar({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), markets: market === "all" ? undefined : market === "gold" ? "gold,rates,usd" : "btc,eth,crypto" });
+  const cal = useCalendar({ from: new Date(from).toISOString(), to: new Date(to).toISOString(), markets: market === "all" ? undefined : market === "gold" ? "gold,silver,rates,usd" : "btc,eth,crypto" });
   const events = (cal.data?.events ?? []).filter((e) => imp[e.importance]);
   const byDay = useMemo(() => {
     const m = new Map<string, EconEvent[]>();
@@ -255,7 +287,7 @@ function Calendar() {
       <Card padded={false}>
         <div className="p-3 flex flex-col lg:flex-row lg:items-center gap-3">
           <Segmented size="sm" options={[{ value: "today" as const, label: "Today" }, { value: "week" as const, label: "This week ±7d" }, { value: "7" as const, label: "Next 7 days" }, { value: "30" as const, label: "Next 30 days" }]} value={range} onChange={setRange} />
-          <Segmented size="sm" options={[{ value: "all" as const, label: "All markets" }, { value: "gold" as const, label: "Gold / USD / rates" }, { value: "crypto" as const, label: "Crypto" }]} value={market} onChange={setMarket} />
+          <Segmented size="sm" options={[{ value: "all" as const, label: "All markets" }, { value: "gold" as const, label: "Gold / silver / USD / rates" }, { value: "crypto" as const, label: "Crypto" }]} value={market} onChange={setMarket} />
           <div className="flex items-center gap-3 lg:ml-auto">
             {(["high", "medium", "low", "holiday"] as const).map((k) => (
               <label key={k} className="flex items-center gap-1.5 text-xs text-ink-2 capitalize"><input type="checkbox" checked={imp[k]} onChange={(e) => setImp({ ...imp, [k]: e.target.checked })} className="accent-[var(--accent)]" />{k}</label>
@@ -294,7 +326,7 @@ function CalendarRow({ e, tz }: { e: EconEvent; tz: string }) {
         <td className="px-2 py-2 tabular text-right text-ink-2">{e.previous ?? "—"}</td>
         <td className="px-2 py-2 tabular text-right text-ink-2">{e.forecast ?? "—"}</td>
         <td className="px-2 py-2 tabular text-right text-ink-1 font-medium">{e.actual ?? (past ? <Tooltip content="Actual values are only shown when supplied by a data provider; they are never estimated."><span className="text-ink-3 cursor-help">n/a</span></Tooltip> : "—")}</td>
-        <td className="px-4 py-2"><div className="flex gap-1 flex-wrap">{e.relatedMarkets.map((m) => <span key={m} className={cls("px-1.5 h-5 inline-flex items-center rounded text-[10.5px]", m === "gold" ? "bg-gold-soft text-gold" : m === "btc" || m === "eth" || m === "crypto" ? "bg-accent-soft text-accent" : "bg-surface-3 text-ink-2")}>{m}</span>)}</div></td>
+        <td className="px-4 py-2"><div className="flex gap-1 flex-wrap">{e.relatedMarkets.map((m) => <span key={m} className={cls("px-1.5 h-5 inline-flex items-center rounded text-[10.5px]", m === "gold" ? "bg-gold-soft text-gold" : m === "silver" ? "bg-silver-soft text-silver" : m === "btc" || m === "eth" || m === "crypto" ? "bg-accent-soft text-accent" : "bg-surface-3 text-ink-2")}>{m}</span>)}</div></td>
       </tr>
       {open && e.whyItMatters && <tr className="bg-surface-2"><td colSpan={8} className="px-4 py-2 text-xs text-ink-2"><span className="font-medium text-ink-1">Why it matters: </span>{e.whyItMatters} <span className="text-ink-3">· Source: {e.source.label}{e.source.url ? <> · <a className="text-accent" href={e.source.url} target="_blank" rel="noreferrer noopener">link</a></> : null}</span></td></tr>}
     </>
@@ -302,16 +334,16 @@ function CalendarRow({ e, tz }: { e: EconEvent; tz: string }) {
 }
 
 function News() {
-  const [topic, setTopic] = useState<"all" | "crypto" | "gold" | "macro">("all");
+  const [topic, setTopic] = useState<"all" | "crypto" | "gold" | "silver" | "macro">("all");
   const [onlyRelevant, setOnlyRelevant] = useState(false);
   const news = useNews(topic, 120);
-  const items = (news.data?.items ?? []).filter((n) => !onlyRelevant || n.relevance.some((r) => ["gold", "btc", "eth", "fed"].includes(r)));
+  const items = (news.data?.items ?? []).filter((n) => !onlyRelevant || n.relevance.some((r) => ["gold", "silver", "btc", "eth", "fed"].includes(r)));
   return (
     <div className="space-y-4">
       <Card padded={false}>
         <div className="p-3 flex flex-col sm:flex-row sm:items-center gap-3">
-          <Segmented size="sm" options={[{ value: "all" as const, label: "All" }, { value: "crypto" as const, label: "Crypto" }, { value: "gold" as const, label: "Gold" }, { value: "macro" as const, label: "Macro" }]} value={topic} onChange={setTopic} />
-          <Toggle checked={onlyRelevant} onChange={setOnlyRelevant} label="Only gold / BTC / Fed tagged" />
+          <Segmented size="sm" options={[{ value: "all" as const, label: "All" }, { value: "crypto" as const, label: "Crypto" }, { value: "gold" as const, label: "Gold" }, { value: "silver" as const, label: "Silver" }, { value: "macro" as const, label: "Macro" }]} value={topic} onChange={setTopic} />
+          <Toggle checked={onlyRelevant} onChange={setOnlyRelevant} label="Only gold / silver / BTC / Fed tagged" />
           <span className="text-xs text-ink-3 sm:ml-auto">{news.data ? `${items.length} items · fetched ${fmtAge(news.data.fetchedAt)}${news.data.failed.length ? ` · feeds unavailable: ${news.data.failed.join(", ")}` : ""}` : ""}</span>
         </div>
       </Card>

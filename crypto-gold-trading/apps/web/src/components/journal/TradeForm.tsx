@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ImagePlus, X } from "lucide-react";
-import { assetBase, resolveAsset, TIMEFRAMES, riskReward, type AssetId, type Timeframe, type TradeSetup } from "@terminal/core";
+import { contractSizeFor, defaultQuantityUnit, TIMEFRAMES, riskReward, type AssetId, type Timeframe, type TradeSetup } from "@terminal/core";
 import { Button, Field, Input, Modal, Select, Toggle } from "@/components/ui";
 import { AssetPicker } from "@/components/ui/AssetPicker";
 import { useAssetLabel } from "@/lib/assets";
@@ -37,7 +37,7 @@ export function prefillFromSetup(s: TradeSetup): TradePrefill {
     setupType: s.setupType ?? "other",
     timeframe: s.timeframe,
     quantity: s.sizingPreview?.quantity,
-    quantityUnit: s.sizingPreview?.quantityUnit ?? (s.assetId === "XAUUSD" ? "lots" : assetBase(s.assetId)),
+    quantityUnit: s.sizingPreview?.quantityUnit ?? defaultQuantityUnit(s.assetId),
     riskPct: s.sizingPreview?.riskPct,
     riskAmount: s.sizingPreview?.riskAmount,
     entryReasoning: [`From AI setup ${s.id} (${s.status}, quality ${s.qualityScore}).`, ...s.rationale].join("\n"),
@@ -80,7 +80,7 @@ export function TradeForm({ open, onClose, prefill }: { open: boolean; onClose: 
     setStop(p.stop !== undefined ? String(p.stop) : "");
     setTp(p.takeProfit !== undefined && p.takeProfit !== null ? String(p.takeProfit) : "");
     setQty(p.quantity !== undefined ? String(p.quantity) : "");
-    setQtyUnit(p.quantityUnit ?? ((p.assetId ?? "BTCUSD") === "XAUUSD" ? "lots" : assetBase(p.assetId ?? "BTCUSD")));
+    setQtyUnit(p.quantityUnit ?? defaultQuantityUnit(p.assetId ?? "BTCUSD"));
     setRiskPct(String(p.riskPct ?? settings.data?.settings.defaultRiskPct ?? 1));
     setRiskAmount(p.riskAmount !== undefined ? String(Math.round(p.riskAmount * 100) / 100) : "");
     setReason(p.entryReasoning ?? "");
@@ -96,7 +96,8 @@ export function TradeForm({ open, onClose, prefill }: { open: boolean; onClose: 
   const geometryOk = Number.isFinite(e) && Number.isFinite(s) && (direction === "LONG" ? s < e : s > e);
   const tpOk = tp === "" || (Number.isFinite(t) && (direction === "LONG" ? t > e : t < e));
   const rr = geometryOk && Number.isFinite(t) ? riskReward(e, s, t) : null;
-  const contractSize = assetId === "XAUUSD" && qtyUnit === "lots" ? 100 : 1;
+  // A metal trade recorded in lots uses the standard lot: 100 oz of gold, 5,000 oz of silver.
+  const contractSize = contractSizeFor(assetId, qtyUnit);
   const derivedRisk = geometryOk && Number.isFinite(parseFloat(qty)) ? Math.abs(e - s) * parseFloat(qty) * contractSize : null;
   const addFiles = (files: FileList | null) => {
     if (!files) return;
@@ -166,7 +167,7 @@ export function TradeForm({ open, onClose, prefill }: { open: boolean; onClose: 
             value={assetId}
             onSelect={(id) => {
               setAssetId(id as AssetId);
-              setQtyUnit(id === "XAUUSD" ? "lots" : resolveAsset(id).base);
+              setQtyUnit(defaultQuantityUnit(id));
             }}
           />
         </Field>
@@ -213,7 +214,7 @@ export function TradeForm({ open, onClose, prefill }: { open: boolean; onClose: 
         <Field label="Risk %">
           <Input type="number" inputMode="decimal" step="0.25" value={riskPct} onChange={(ev) => setRiskPct(ev.target.value)} />
         </Field>
-        <Field label={`Risk amount (${settings.data?.settings.accountCurrency ?? "USD"})`} hint="Left blank it is derived from quantity × stop distance (× 100 oz for gold lots).">
+        <Field label={`Risk amount (${settings.data?.settings.accountCurrency ?? "USD"})`} hint="Left blank it is derived from quantity × stop distance (× 100 oz for gold lots, × 5,000 oz for silver lots).">
           <Input type="number" inputMode="decimal" value={riskAmount} onChange={(ev) => setRiskAmount(ev.target.value)} placeholder={derivedRisk !== null ? fmtNum(derivedRisk, 2) : ""} />
         </Field>
         <Field label="Entry reasoning" className="sm:col-span-4">

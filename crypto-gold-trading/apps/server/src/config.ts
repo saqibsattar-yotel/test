@@ -50,6 +50,8 @@ export function featureFlags() {
   return {
     ai: { enabled: config.hasAnthropic, model: config.hasAnthropic ? config.ANTHROPIC_MODEL : null, fallback: "rule-based explainer" },
     goldSpot: { provider: config.hasTwelveData ? "twelvedata+dukascopy+swissquote" : "dukascopy+swissquote", proxy: false },
+    /** Spot silver comes from the same providers as spot gold. */
+    silverSpot: { provider: config.hasTwelveData ? "twelvedata+dukascopy+swissquote" : "dukascopy+swissquote", proxy: false },
     macro: { yields: config.hasFred ? "fred" : "treasury.gov", dollarIndex: "ice-formula-dukascopy+swissquote" },
     calendar: { officialSchedule: true, forexFactoryFeed: config.CALENDAR_FF_FEED },
     demoMode: config.DEMO_MODE,

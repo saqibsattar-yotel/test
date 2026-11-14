@@ -1,9 +1,9 @@
 /**
  * Dynamic asset registry: every Binance USDT spot pair that is currently trading, enriched
- * with CoinGecko names, ranks and market caps, plus the curated core set and gold.
+ * with CoinGecko names, ranks and market caps, plus the curated core set, spot gold and spot silver.
  * Refreshed every 6 hours; routes validate ids against it and the UI searches it.
  */
-import { ASSETS, assetBase, isAssetId, isCoreAsset, precisionForPrice, resolveAsset, type AssetMeta } from "@terminal/core";
+import { ASSETS, METALS, assetBase, isAssetId, isCoreAsset, isMetalAsset, precisionForPrice, resolveAsset, type AssetClass, type AssetMeta } from "@terminal/core";
 import { fetchJson } from "../lib/http";
 import { logger } from "../lib/logger";
 
@@ -14,7 +14,7 @@ export interface AssetInfo {
   symbol: string;
   name: string;
   base: string;
-  assetClass: "crypto" | "gold";
+  assetClass: AssetClass;
   rank: number | null;
   marketCapUsd: number | null;
   priceUsd: number | null;
@@ -52,8 +52,14 @@ export function buildRegistry(exchangeSymbols: ExchangeSymbol[], coins: CgCoin[]
   }
   // Core assets first (hand-tuned metadata).
   for (const meta of Object.values(ASSETS)) {
+    if (isMetalAsset(meta.id)) {
+      // Spot metals are not exchange coins: no Binance symbol, and never a look-alike ticker's CoinGecko data.
+      const m = METALS[meta.id];
+      byId.set(meta.id, { id: meta.id, symbol: meta.symbol, name: `${m.title} — spot ${m.pair}`, base: meta.base, assetClass: meta.assetClass, rank: null, marketCapUsd: null, priceUsd: null, binanceSymbol: null, pricePrecision: meta.pricePrecision, core: true });
+      continue;
+    }
     const cg = cgBySymbol.get(meta.base);
-    byId.set(meta.id, { id: meta.id, symbol: meta.symbol, name: meta.assetClass === "gold" ? "Gold — spot XAU/USD" : meta.name, base: meta.base, assetClass: meta.assetClass, rank: meta.assetClass === "gold" ? null : (cg?.rank ?? null), marketCapUsd: cg?.marketCapUsd ?? null, priceUsd: cg?.priceUsd ?? null, binanceSymbol: meta.assetClass === "gold" ? null : `${meta.base}USDT`, pricePrecision: meta.pricePrecision, core: true });
+    byId.set(meta.id, { id: meta.id, symbol: meta.symbol, name: meta.name, base: meta.base, assetClass: meta.assetClass, rank: cg?.rank ?? null, marketCapUsd: cg?.marketCapUsd ?? null, priceUsd: cg?.priceUsd ?? null, binanceSymbol: `${meta.base}USDT`, pricePrecision: meta.pricePrecision, core: true });
   }
   for (const s of exchangeSymbols) {
     if (s.quoteAsset !== "USDT" || s.status !== "TRADING") continue;

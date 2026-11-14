@@ -7,15 +7,32 @@
  * cannot afford one unit, and a static margin disclaimer instead of a fake number.
  */
 import { decimalsOf, floorToStep, isFiniteNumber, roundTo } from "../math";
-import type { Direction } from "../types";
+import { isMetalAsset, METALS, type Direction } from "../types";
 
-export type InstrumentKind = "crypto_spot" | "crypto_perp" | "crypto_futures_cme" | "gold_cfd" | "gold_futures";
+export type InstrumentKind = "crypto_spot" | "crypto_perp" | "crypto_futures_cme" | "gold_cfd" | "gold_futures" | "silver_cfd" | "silver_futures";
+
+export const INSTRUMENT_KINDS: InstrumentKind[] = ["crypto_spot", "crypto_perp", "crypto_futures_cme", "gold_cfd", "gold_futures", "silver_cfd", "silver_futures"];
+
+/** Broker CFDs on a spot metal: lot size, leverage and margin are the broker's own. */
+export function isMetalCfdKind(kind: InstrumentKind): boolean {
+  return kind === "gold_cfd" || kind === "silver_cfd";
+}
+
+/** Exchange-traded futures: a hard tick grid, and margin set by the exchange and the broker. */
+export function isExchangeFuturesKind(kind: InstrumentKind): boolean {
+  return kind === "gold_futures" || kind === "silver_futures" || kind === "crypto_futures_cme";
+}
+
+/** Whether an instrument kind is a way to trade this asset (gold kinds for XAU/USD, silver kinds for XAG/USD, crypto kinds otherwise). */
+export function instrumentKindFitsAsset(kind: InstrumentKind, assetId: string): boolean {
+  return isMetalAsset(assetId) ? kind.startsWith(`${METALS[assetId].metal}_`) : kind.startsWith("crypto");
+}
 
 export interface InstrumentSpec {
   id: string;
   kind: InstrumentKind;
   label: string;
-  /** Base units represented by one unit of `quantity` (1 for spot coins; 100 oz for a standard XAU lot or GC). */
+  /** Base units represented by one unit of `quantity` (1 for spot coins; 100 oz for a standard XAU lot or GC; 5,000 oz for a standard XAG lot or SI). */
   contractSize: number;
   baseUnit: string; // "BTC", "oz"
   quantityUnit: string; // "BTC", "lots", "contracts"
@@ -181,6 +198,69 @@ export const INSTRUMENT_SPECS: Record<string, InstrumentSpec> = {
     note: "Verify current contract specifications with CME before trading.",
     hardTickGrid: true,
   },
+  "xag-cfd-standard": {
+    id: "xag-cfd-standard",
+    kind: "silver_cfd",
+    label: "XAG/USD CFD — standard lot (5,000 oz)",
+    contractSize: 5000,
+    baseUnit: "oz",
+    quantityUnit: "lots",
+    quoteCurrency: "USD",
+    tickSize: 0.001,
+    qtyStep: 0.01,
+    minQty: 0.01,
+    maxLeverage: 10,
+    source: "Common retail broker convention (1 lot = 5,000 troy oz; $0.01 move = $50 per lot)",
+    note: "BROKER-SPECIFIC. Lot size, minimum lot, leverage and margin differ by broker — verify your own contract specification. Some brokers quote silver in 1,000 oz or 50 oz lots.",
+    hardTickGrid: false,
+  },
+  "xag-cfd-mini": {
+    id: "xag-cfd-mini",
+    kind: "silver_cfd",
+    label: "XAG/USD CFD — mini lot (500 oz)",
+    contractSize: 500,
+    baseUnit: "oz",
+    quantityUnit: "lots",
+    quoteCurrency: "USD",
+    tickSize: 0.001,
+    qtyStep: 0.01,
+    minQty: 0.01,
+    maxLeverage: 10,
+    source: "Common retail broker convention",
+    note: "BROKER-SPECIFIC — verify your contract specification.",
+    hardTickGrid: false,
+  },
+  "comex-SI": {
+    id: "comex-SI",
+    kind: "silver_futures",
+    label: "COMEX Silver futures (SI)",
+    contractSize: 5000,
+    baseUnit: "oz",
+    quantityUnit: "contracts",
+    quoteCurrency: "USD",
+    tickSize: 0.005,
+    qtyStep: 1,
+    minQty: 1,
+    source: "COMEX Rulebook Chapter 112 (5,000 troy oz; $0.005 minimum fluctuation for outright trades = $25.00)",
+    verified: "2026-11-14 (COMEX Rulebook Chapter 112 on cmegroup.com)",
+    note: "Exchange margin is broker/time-dependent and NOT computed here.",
+    hardTickGrid: true,
+  },
+  "comex-SIL": {
+    id: "comex-SIL",
+    kind: "silver_futures",
+    label: "COMEX Micro Silver futures (SIL)",
+    contractSize: 1000,
+    baseUnit: "oz",
+    quantityUnit: "contracts",
+    quoteCurrency: "USD",
+    tickSize: 0.005,
+    qtyStep: 1,
+    minQty: 1,
+    source: "CME Micro Silver futures contract specs (1,000 troy oz; $0.005 tick = $5.00)",
+    note: "Verify current contract specifications with CME before trading.",
+    hardTickGrid: true,
+  },
 };
 
 export const RISK_PCT_WARNING_THRESHOLD = 2.0;
@@ -261,7 +341,7 @@ export function sizePosition(input: SizingInput): SizingResult {
     notionalQuote: 0,
     notionalAccount: 0,
     marginEstimateAccount: null,
-    marginNote: spec.kind === "gold_futures" || spec.kind === "crypto_futures_cme" ? "Exchange margin requirements are broker- and time-dependent and are NOT computed here. Verify initial/maintenance margin with your broker." : "Margin shown is an ESTIMATE (notional ÷ leverage). Your broker's actual requirement may differ.",
+    marginNote: isExchangeFuturesKind(spec.kind) ? "Exchange margin requirements are broker- and time-dependent and are NOT computed here. Verify initial/maintenance margin with your broker." : "Margin shown is an ESTIMATE (notional ÷ leverage). Your broker's actual requirement may differ.",
     potentialLossAccount: 0,
     potentialProfitAccount: null,
     riskReward: null,
@@ -330,7 +410,7 @@ export function sizePosition(input: SizingInput): SizingResult {
   const leverage = input.leverage && isFiniteNumber(input.leverage) && input.leverage > 0 ? input.leverage : null;
   if (leverage && spec.maxLeverage && leverage > spec.maxLeverage) warnings.push(`Leverage ${leverage}x exceeds the instrument's maximum (${spec.maxLeverage}x)`);
   let marginEstimate: number | null = null;
-  if (spec.kind === "crypto_perp" || spec.kind === "gold_cfd") {
+  if (spec.kind === "crypto_perp" || isMetalCfdKind(spec.kind)) {
     marginEstimate = leverage ? notionalQuote / leverage : notionalQuote; // 1x if no leverage given
   } else if (spec.kind === "crypto_spot") {
     marginEstimate = notionalQuote; // fully funded
@@ -347,7 +427,7 @@ export function sizePosition(input: SizingInput): SizingResult {
   } else if (spec.kind === "crypto_perp") {
     liquidationNote = "Enter leverage to estimate the liquidation price.";
   }
-  if (spec.kind === "gold_cfd") warnings.push("CFD contract size, leverage and margin are broker-specific — verify your broker's specification");
+  if (isMetalCfdKind(spec.kind)) warnings.push("CFD contract size, leverage and margin are broker-specific — verify your broker's specification");
   if (marginEstimate !== null && marginEstimate * fx > accountBalance) warnings.push("Estimated margin exceeds the account balance — position is not fundable at this leverage");
 
   return {
@@ -383,6 +463,7 @@ export function rMultiple(direction: Direction, entry: number, stop: number, exi
 
 export function defaultSpecFor(assetId: string, prefer: "spot" | "perp" | "cfd" | "futures" = "spot"): InstrumentSpec {
   if (assetId === "XAUUSD") return prefer === "futures" ? INSTRUMENT_SPECS["comex-GC"] : INSTRUMENT_SPECS["xau-cfd-standard"];
+  if (assetId === "XAGUSD") return prefer === "futures" ? INSTRUMENT_SPECS["comex-SI"] : INSTRUMENT_SPECS["xag-cfd-standard"];
   if (prefer === "perp") {
     const base = assetId.replace(/USD$/, "");
     const id = `binance-perp-${base}USDT`;
@@ -394,4 +475,17 @@ export function defaultSpecFor(assetId: string, prefer: "spot" | "perp" | "cfd" 
   const id = `binance-spot-${base}USDT`;
   if (INSTRUMENT_SPECS[id]) return INSTRUMENT_SPECS[id];
   return { ...INSTRUMENT_SPECS["binance-spot-BTCUSDT"], id, label: `Binance spot ${base}/USDT`, baseUnit: base, quantityUnit: base, tickSize: 0.0001, qtyStep: 0.0001, minQty: 0.0001 };
+}
+
+/**
+ * Base units in one unit of quantity for a journal trade: a metal trade recorded in "lots" uses the
+ * standard lot (100 oz of gold, 5,000 oz of silver); everything else is recorded in base units.
+ */
+export function contractSizeFor(assetId: string, quantityUnit: string): number {
+  return isMetalAsset(assetId) && quantityUnit === "lots" ? METALS[assetId].standardLotOz : 1;
+}
+
+/** The unit a new trade in this asset is normally recorded in: lots for spot metals, the coin otherwise. */
+export function defaultQuantityUnit(assetId: string): string {
+  return isMetalAsset(assetId) ? "lots" : assetId.replace(/USD$/, "");
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sizePosition, INSTRUMENT_SPECS, riskReward, rMultiple, evaluateCircuitBreaker, evaluateDisciplineGate, portfolioHeat } from "../src";
+import { sizePosition, INSTRUMENT_SPECS, riskReward, rMultiple, evaluateCircuitBreaker, evaluateDisciplineGate, portfolioHeat, defaultSpecFor, contractSizeFor, defaultQuantityUnit, instrumentKindFitsAsset } from "../src";
 
 describe("position sizing", () => {
   it("sizes a spot crypto long by risk budget and floors to the lot step", () => {
@@ -46,6 +46,54 @@ describe("position sizing", () => {
     const offGrid = sizePosition({ accountBalance: 100000, accountCurrency: "USD", riskPct: 2, direction: "LONG", entry: 2650.05, stop: 2635.0, spec: INSTRUMENT_SPECS["comex-GC"] });
     expect(offGrid.status).toBe("INVALID");
     expect(offGrid.reasons[0]).toContain("tick grid");
+  });
+  it("sizes a silver CFD in lots (5,000 oz) — $0.01 move = $50 per lot", () => {
+    const r = sizePosition({ accountBalance: 20000, accountCurrency: "USD", riskPct: 1, direction: "LONG", entry: 48.5, stop: 47.7, takeProfit: 50.5, leverage: 10, spec: INSTRUMENT_SPECS["xag-cfd-standard"] });
+    expect(r.status).toBe("SIZED");
+    expect(r.riskPerUnitQuote).toBeCloseTo(4000, 6); // 0.80 × 5,000 oz
+    expect(r.quantity).toBe(0.05);
+    expect(r.baseUnits).toBe(250);
+    expect(r.potentialLossAccount).toBeCloseTo(200, 6);
+    expect(r.tickValueQuote).toBeCloseTo(5, 9); // $0.001 × 5,000 oz
+    expect(r.marginEstimateAccount).toBeCloseTo((0.05 * 5000 * 48.5) / 10, 6);
+    expect(r.riskReward).toBeCloseTo(2.5, 6);
+    expect(r.warnings.some((w) => w.includes("broker-specific"))).toBe(true);
+    const tooMuch = sizePosition({ accountBalance: 20000, accountCurrency: "USD", riskPct: 1, direction: "LONG", entry: 48.5, stop: 47.7, leverage: 20, spec: INSTRUMENT_SPECS["xag-cfd-standard"] });
+    expect(tooMuch.warnings.some((w) => w.includes("exceeds the instrument's maximum (10x)"))).toBe(true);
+  });
+  it("sizes COMEX silver (SI 5,000 oz, SIL 1,000 oz) on the $0.005 tick grid and never rounds up", () => {
+    const si = sizePosition({ accountBalance: 100000, accountCurrency: "USD", riskPct: 2, direction: "SHORT", entry: 48.5, stop: 48.85, spec: INSTRUMENT_SPECS["comex-SI"] });
+    expect(si.status).toBe("SIZED");
+    expect(si.riskPerUnitQuote).toBeCloseTo(1750, 6); // 0.35 × 5,000 oz
+    expect(si.quantity).toBe(1); // 2000 / 1750 = 1.14 → 1
+    expect(si.stopDistanceTicks).toBe(70);
+    expect(si.tickValueQuote).toBeCloseTo(25, 9);
+    expect(si.marginEstimateAccount).toBeNull();
+    expect(si.marginNote).toContain("NOT computed");
+    const micro = sizePosition({ accountBalance: 100000, accountCurrency: "USD", riskPct: 2, direction: "SHORT", entry: 48.5, stop: 48.85, spec: INSTRUMENT_SPECS["comex-SIL"] });
+    expect(micro.quantity).toBe(5); // 2000 / 350 = 5.7 → 5
+    expect(micro.tickValueQuote).toBeCloseTo(5, 9);
+    const offGrid = sizePosition({ accountBalance: 100000, accountCurrency: "USD", riskPct: 2, direction: "SHORT", entry: 48.503, stop: 48.85, spec: INSTRUMENT_SPECS["comex-SI"] });
+    expect(offGrid.status).toBe("INVALID");
+    expect(offGrid.reasons[0]).toContain("tick grid");
+    const tooSmall = sizePosition({ accountBalance: 10000, accountCurrency: "USD", riskPct: 1, direction: "LONG", entry: 48.5, stop: 48, spec: INSTRUMENT_SPECS["comex-SI"] });
+    expect(tooSmall.status).toBe("NO_TRADE"); // one contract risks $2,500 against a $100 budget
+  });
+  it("picks each metal's own instruments and lot size", () => {
+    expect(defaultSpecFor("XAUUSD", "cfd").id).toBe("xau-cfd-standard");
+    expect(defaultSpecFor("XAGUSD", "cfd").id).toBe("xag-cfd-standard");
+    expect(defaultSpecFor("XAGUSD", "spot").id).toBe("xag-cfd-standard"); // spot metal is traded as a CFD, never as a coin
+    expect(defaultSpecFor("XAGUSD", "futures").id).toBe("comex-SI");
+    expect(contractSizeFor("XAUUSD", "lots")).toBe(100);
+    expect(contractSizeFor("XAGUSD", "lots")).toBe(5000);
+    expect(contractSizeFor("XAGUSD", "oz")).toBe(1);
+    expect(contractSizeFor("BTCUSD", "lots")).toBe(1);
+    expect(defaultQuantityUnit("XAGUSD")).toBe("lots");
+    expect(defaultQuantityUnit("SOLUSD")).toBe("SOL");
+    const kinds = (assetId: string) => Object.values(INSTRUMENT_SPECS).filter((s) => instrumentKindFitsAsset(s.kind, assetId)).map((s) => s.id);
+    expect(kinds("XAGUSD")).toEqual(["xag-cfd-standard", "xag-cfd-mini", "comex-SI", "comex-SIL"]);
+    expect(kinds("XAUUSD")).toEqual(["xau-cfd-standard", "xau-cfd-mini", "comex-GC", "comex-MGC"]);
+    expect(kinds("ETHUSD").every((id) => id.startsWith("binance-") || id.startsWith("cme-"))).toBe(true);
   });
   it("returns NO_TRADE when the risk budget cannot afford one contract", () => {
     const r = sizePosition({ accountBalance: 10000, accountCurrency: "USD", riskPct: 1, direction: "LONG", entry: 2650, stop: 2630, spec: INSTRUMENT_SPECS["comex-GC"] });

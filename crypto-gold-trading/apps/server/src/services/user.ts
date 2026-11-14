@@ -28,11 +28,11 @@ export const DEFAULT_SETTINGS: UserSettings = {
   accountCurrency: "USD",
   defaultRiskPct: 1,
   defaultTimeframe: "4h",
-  followedAssets: ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD"],
+  followedAssets: ["BTCUSD", "ETHUSD", "SOLUSD", "XAUUSD", "XAGUSD"],
   followedTimeframes: ["15m", "1h", "4h", "1d"],
   onboardingComplete: false,
   dashboardLayout: ["tickers", "chart", "regime", "conditions", "briefing", "watchlist", "events", "news"],
-  preferredInstrument: { crypto: "binance-spot-BTCUSDT", gold: "xau-cfd-standard" },
+  preferredInstrument: { crypto: "binance-spot-BTCUSDT", gold: "xau-cfd-standard", silver: "xag-cfd-standard" },
   autoMonitorSetups: false,
 };
 
@@ -72,9 +72,14 @@ export interface UserState {
   triggered: TriggeredAlert[];
   savedSetups: TradeSetup[];
   savedAnalyses: { id: string; title: string; createdAt: number; payload: unknown }[];
+  /** One-time migrations already applied to this file (see applyUserMigrations). */
+  migrations?: string[];
 }
 
-export const userStore = new JsonStore<UserState>("user", () => ({ settings: DEFAULT_SETTINGS, watchlist: ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "XAUUSD"], favorites: ["BTCUSD", "XAUUSD"], alerts: [], triggered: [], savedSetups: [], savedAnalyses: [] }));
+/** Silver was added after the first release: files written before that get it next to gold, once. */
+const SILVER_MIGRATION = "add-silver";
+
+export const userStore = new JsonStore<UserState>("user", () => ({ settings: DEFAULT_SETTINGS, watchlist: ["BTCUSD", "ETHUSD", "SOLUSD", "BNBUSD", "XRPUSD", "XAUUSD", "XAGUSD"], favorites: ["BTCUSD", "XAUUSD"], alerts: [], triggered: [], savedSetups: [], savedAnalyses: [], migrations: [SILVER_MIGRATION] }));
 
 export const journalStore = new JsonStore<{ trades: JournalTrade[] }>("journal", () => ({ trades: [] }));
 
@@ -89,4 +94,28 @@ export function normalizeSettings(stored: Partial<UserSettings> | undefined): Us
 export async function getSettings(): Promise<UserSettings> {
   const s = await userStore.load();
   return normalizeSettings(s.settings);
+}
+
+/** Silver goes right after gold in a list that holds gold; a list without gold is left as the user made it. */
+export function withSilverNextToGold(list: AssetId[] | undefined): AssetId[] | undefined {
+  if (!Array.isArray(list) || list.includes("XAGUSD") || !list.includes("XAUUSD")) return list;
+  const out = [...list];
+  out.splice(out.indexOf("XAUUSD") + 1, 0, "XAGUSD");
+  return out;
+}
+
+/**
+ * Brings a user file written by an earlier build up to date, once. Anyone who follows gold gets silver
+ * next to it (ticker, setups, watchlist); the marker makes sure that removing it afterwards sticks.
+ */
+export function migrateUserState(state: UserState): { state: UserState; changed: boolean } {
+  if (state.migrations?.includes(SILVER_MIGRATION)) return { state, changed: false };
+  const settings = state.settings ? { ...state.settings, followedAssets: withSilverNextToGold(state.settings.followedAssets) ?? state.settings.followedAssets } : state.settings;
+  return { state: { ...state, settings, watchlist: withSilverNextToGold(state.watchlist) ?? state.watchlist, migrations: [...(state.migrations ?? []), SILVER_MIGRATION] }, changed: true };
+}
+
+/** Run once at server start, before anything reads the settings. */
+export async function applyUserMigrations(): Promise<void> {
+  const { state, changed } = migrateUserState(await userStore.load());
+  if (changed) await userStore.save(state);
 }
