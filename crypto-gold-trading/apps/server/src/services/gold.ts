@@ -6,13 +6,18 @@
  *    Dukascopy FX archive, live value from Swissquote. (Dukascopy's "USDIDX" instrument was probed
  *    and found to be a flat placeholder, so it is not used.)
  *  - Verification: Swissquote vs gold-api.com vs Dukascopy vs Twelve Data (if keyed).
+ *  - First start: the archive is downloaded once in the background (see prewarm). No request waits for
+ *    it: callers get WarmingError after a short wait and the UI retries.
  */
+import fs from "node:fs";
+import path from "node:path";
 import type { AssetId, Candle, DataSource, Quote, Timeframe } from "@terminal/core";
 import { TIMEFRAME_MS } from "@terminal/core";
 import { config } from "../config";
 import { cache } from "../lib/cache";
 import { logger } from "../lib/logger";
 import { JsonStore } from "../lib/store";
+import { WarmSeries, isWarming, type Loaded } from "../lib/warming";
 import { aggregate, dukascopy } from "../providers/dukascopy";
 import { dxyFromRates, getGoldApiPrice, getLiveDxyFromSwissquote, getSwissquoteQuote, isSpotMarketOpen, type SqQuote } from "../providers/swissquote";
 import type { CandleProvider, CandleResult, QuoteProvider } from "../providers/types";
@@ -145,30 +150,85 @@ export function aggregateWeekly(daily: Candle[]): Candle[] {
   return out;
 }
 
-/** Spot XAU/USD candles at a terminal timeframe: Dukascopy archive merged with live sampling. */
-export async function getInstrumentCandles(instrument: "XAUUSD", timeframe: Timeframe, limit: number): Promise<Candle[]> {
-  const key = `duka:${instrument}:${timeframe}:${limit}`;
-  const ttl = timeframe === "1d" || timeframe === "1w" ? 15 * 60_000 : timeframe === "4h" ? 5 * 60_000 : 60_000;
-  const res = await cache.getOrLoad<Candle[]>(key, ttl, async () => {
-    const now = Date.now();
-    const bucket = TIMEFRAME_MS[timeframe];
-    let history: Candle[];
-    let step: number;
-    if (timeframe === "1d" || timeframe === "1w") {
-      history = await dukascopy.dailySeries(instrument, 2, now);
-      step = DAY;
-    } else if (timeframe === "1h" || timeframe === "4h") {
-      history = await dukascopy.hourlySeries(instrument, Math.min(12, Math.ceil((limit * bucket) / (30 * DAY)) + 1), now);
-      step = HOUR;
-    } else {
-      history = await dukascopy.minuteSeries(instrument, now - Math.max(3, Math.ceil((limit * bucket) / DAY) + 2) * DAY, now);
-      step = 60_000;
-    }
-    const merged = mergeLive(history, liveSampler.xauCandles(), bucket === 7 * DAY ? DAY : bucket, step);
-    const series = bucket === 7 * DAY ? aggregateWeekly(merged) : merged;
-    return series.slice(-limit);
-  });
-  return res.value;
+/** How long a request handler waits for archive data before answering "still downloading". */
+export const REQUEST_WAIT_MS = 2500;
+
+const candleTtl = (timeframe: Timeframe) => (timeframe === "1d" || timeframe === "1w" ? 15 * 60_000 : timeframe === "4h" ? 5 * 60_000 : 60_000);
+
+/**
+ * Archive depth tiers. Requests are served from a few shared series (one per timeframe and depth)
+ * instead of one cache entry per requested bar count.
+ */
+export function depthFor(timeframe: Timeframe, limit: number): number {
+  const bucket = TIMEFRAME_MS[timeframe];
+  if (timeframe === "1d" || timeframe === "1w") return 0; // always the full two years of daily bars
+  if (timeframe === "1h" || timeframe === "4h") {
+    const months = Math.ceil((limit * bucket) / (30 * DAY)) + 1;
+    // Up to 8 months stays inside the month files the daily history needs anyway (no extra downloads).
+    return months <= 2 ? 2 : months <= 5 ? 5 : months <= 8 ? 8 : 12;
+  }
+  const days = Math.max(3, Math.ceil((limit * bucket) / DAY) + 2);
+  return days <= 5 ? 5 : days <= 12 ? 12 : 35; // calendar days
+}
+
+const xauSeries = new Map<string, WarmSeries<Candle[]>>();
+
+function xauSeriesFor(timeframe: Timeframe, depth: number): WarmSeries<Candle[]> {
+  const key = `${timeframe}:${depth}`;
+  let series = xauSeries.get(key);
+  if (!series) {
+    series = new WarmSeries<Candle[]>("Spot-gold price history", async () => {
+      const now = Date.now();
+      const missesBefore = dukascopy.stats.misses;
+      const bucket = TIMEFRAME_MS[timeframe];
+      let history: Candle[];
+      let step: number;
+      if (timeframe === "1d" || timeframe === "1w") {
+        history = await dukascopy.dailySeries("XAUUSD", 2, now);
+        step = DAY;
+      } else if (timeframe === "1h" || timeframe === "4h") {
+        history = await dukascopy.hourlySeries("XAUUSD", depth, now);
+        step = HOUR;
+      } else {
+        history = await dukascopy.minuteSeries("XAUUSD", now - depth * DAY, now);
+        step = 60_000;
+      }
+      const merged = mergeLive(history, liveSampler.xauCandles(), bucket === 7 * DAY ? DAY : bucket, step);
+      const value = bucket === 7 * DAY ? aggregateWeekly(merged) : merged;
+      // An empty or partly failed download is retried soon instead of being served for the full TTL.
+      const complete = value.length > 0 && dukascopy.stats.misses === missesBefore;
+      return { value, ttlMs: complete ? candleTtl(timeframe) : 45_000 };
+    });
+    xauSeries.set(key, series);
+  }
+  return series;
+}
+
+/**
+ * Spot XAU/USD candles at a terminal timeframe: Dukascopy archive merged with live sampling.
+ * A series that has never been loaded on this machine is awaited for at most `waitMs`, then the call
+ * fails with WarmingError while the download continues. Pass Infinity to wait for the download.
+ */
+export async function getInstrumentCandles(_instrument: "XAUUSD", timeframe: Timeframe, limit: number, waitMs = REQUEST_WAIT_MS): Promise<Candle[]> {
+  const candles = await xauSeriesFor(timeframe, depthFor(timeframe, limit)).get(waitMs);
+  return candles.slice(-limit);
+}
+
+/** The last few UTC days of spot gold from the smallest possible download: the latest minute files. */
+const recentDays = new WarmSeries<Candle[]>("The previous spot-gold close", async () => {
+  const now = Date.now();
+  const missesBefore = dukascopy.stats.misses;
+  // Three calendar days back is at most three files, one download round: enough for the previous close.
+  const days = aggregate(await dukascopy.minuteSeries("XAUUSD", now - 3 * DAY, now), DAY);
+  return { value: days, ttlMs: days.length > 0 && dukascopy.stats.misses === missesBefore ? 10 * 60_000 : 30_000 };
+});
+
+/**
+ * Recent daily candles for the quote (previous close, today's range). The quote must not depend on the
+ * two-year daily history: on a new machine that takes minutes, these few files take seconds.
+ */
+async function recentDailyCandles(waitMs: number): Promise<Candle[]> {
+  return mergeLive(await recentDays.get(waitMs), liveSampler.xauCandles(), DAY, DAY);
 }
 
 function spotSource(label: string, asOf: number, quality: DataSource["quality"], note: string, url?: string): DataSource {
@@ -180,8 +240,8 @@ export class GoldSpotProvider implements CandleProvider, QuoteProvider {
   supports(assetId: AssetId): boolean {
     return assetId === "XAUUSD";
   }
-  async getCandles(_assetId: AssetId, timeframe: Timeframe, limit: number): Promise<CandleResult> {
-    const candles = await getInstrumentCandles("XAUUSD", timeframe, limit);
+  async getCandles(_assetId: AssetId, timeframe: Timeframe, limit: number, waitMs = REQUEST_WAIT_MS): Promise<CandleResult> {
+    const candles = await getInstrumentCandles("XAUUSD", timeframe, limit, waitMs);
     if (!candles.length) throw new Error("No spot gold history available from Dukascopy");
     const last = candles[candles.length - 1];
     const now = Date.now();
@@ -205,9 +265,15 @@ export class GoldSpotProvider implements CandleProvider, QuoteProvider {
     const age = now - q.ts;
     const open = isSpotMarketOpen(now);
     const quality: DataSource["quality"] = !open ? "closed" : age < 2 * 60_000 ? "live" : age < 20 * 60_000 ? "delayed" : "stale";
-    const daily = await getInstrumentCandles("XAUUSD", "1d", 3).catch(() => [] as Candle[]);
+    // For the first seconds on a machine that has never downloaded gold data this throws WarmingError:
+    // a price shown without its previous close would carry a made-up "0.00 %" change.
+    const daily = await recentDailyCandles(REQUEST_WAIT_MS).catch((err: unknown) => {
+      if (isWarming(err)) throw err;
+      return [] as Candle[];
+    });
     const today = daily.length && daily[daily.length - 1].time >= Math.floor(now / DAY) * DAY - (open ? 0 : 3 * DAY) ? daily[daily.length - 1] : null;
     const prevClose = daily.length >= 2 ? daily[daily.length - 2].close : (daily[0]?.open ?? q.mid);
+    const changeBasis = daily.length >= 2 ? "Change is versus the previous UTC daily close from the Dukascopy archive." : "The previous close is unavailable (archive unreachable), so the change is not meaningful.";
     return {
       assetId,
       price: q.mid,
@@ -222,72 +288,119 @@ export class GoldSpotProvider implements CandleProvider, QuoteProvider {
         asOf: q.ts,
         quality,
         proxy: false,
-        note: `${open ? "Spot market open." : "Spot gold market closed (trades Sun ~22:00 to Fri ~22:00 UTC); showing the last quote."} Bid ${q.bid} / ask ${q.ask} (spread ${q.spread.toFixed(3)}). Change is versus the previous UTC daily close from the Dukascopy archive.`,
+        note: `${open ? "Spot market open." : "Spot gold market closed (trades Sun ~22:00 to Fri ~22:00 UTC); showing the last quote."} Bid ${q.bid} / ask ${q.ask} (spread ${q.spread.toFixed(3)}). ${changeBasis}`,
         url: "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD",
       },
     };
   }
 }
 
-const dxyInflight = new Map<string, Promise<SeriesPoint[]>>();
-
-/**
- * DXY history from the six constituent archives (bar closes, intersected on timestamp). A result whose
- * latest point is not recent (an archive download failed) is cached for one minute only, so it heals.
- */
-export async function dxyHistory(step: "1h" | "1d"): Promise<SeriesPoint[]> {
-  const key = `dxy:hist:${step}`;
-  const hit = cache.get<SeriesPoint[]>(key);
-  if (hit) return hit.value;
-  const inflight = dxyInflight.get(key);
-  if (inflight) return inflight;
-  const p = (async () => {
-    const now = Date.now();
-    const series = await Promise.all(
-      DXY_PAIRS.map((pair) =>
-        (step === "1d" ? dukascopy.dailySeries(pair, 2, now) : dukascopy.hourlySeries(pair, 2, now)).catch((err: Error) => {
-          log.warn(`${pair} ${step} history failed: ${err.message}`);
-          return [] as Candle[];
-        }),
-      ),
-    );
-    let points: SeriesPoint[] = [];
-    if (!series.some((s) => s.length === 0)) {
-      const maps = series.map((s) => new Map(s.map((c) => [c.time, c.close] as const)));
-      const times = [...maps[0].keys()].filter((t) => maps.every((m) => m.has(t))).sort((a, b) => a - b);
-      points = times.map((t) => ({ time: t, value: dxyFromRates({ EURUSD: maps[0].get(t)!, USDJPY: maps[1].get(t)!, GBPUSD: maps[2].get(t)!, USDCAD: maps[3].get(t)!, USDSEK: maps[4].get(t)!, USDCHF: maps[5].get(t)! }) }));
-    }
-    const last = points.length ? points[points.length - 1].time : 0;
-    const complete = last > now - (step === "1d" ? 4 : 3) * DAY;
-    cache.set(key, points, complete ? (step === "1d" ? 15 * 60_000 : 5 * 60_000) : 60_000);
-    if (!complete) log.warn(`DXY ${step} history incomplete (${points.length} points, last ${last ? new Date(last).toISOString() : "none"}); will retry in 60 s`);
-    return points;
-  })().finally(() => dxyInflight.delete(key));
-  dxyInflight.set(key, p);
-  return p;
+/** DXY history from the six constituent archives (bar closes, intersected on timestamp). */
+async function loadDxyHistory(step: "1h" | "1d"): Promise<Loaded<SeriesPoint[]>> {
+  const now = Date.now();
+  const series = await Promise.all(
+    DXY_PAIRS.map((pair) =>
+      (step === "1d" ? dukascopy.dailySeries(pair, 2, now) : dukascopy.hourlySeries(pair, 2, now)).catch((err: Error) => {
+        log.warn(`${pair} ${step} history failed: ${err.message}`);
+        return [] as Candle[];
+      }),
+    ),
+  );
+  let points: SeriesPoint[] = [];
+  if (!series.some((s) => s.length === 0)) {
+    const maps = series.map((s) => new Map(s.map((c) => [c.time, c.close] as const)));
+    const times = [...maps[0].keys()].filter((t) => maps.every((m) => m.has(t))).sort((a, b) => a - b);
+    points = times.map((t) => ({ time: t, value: dxyFromRates({ EURUSD: maps[0].get(t)!, USDJPY: maps[1].get(t)!, GBPUSD: maps[2].get(t)!, USDCAD: maps[3].get(t)!, USDSEK: maps[4].get(t)!, USDCHF: maps[5].get(t)! }) }));
+  }
+  const last = points.length ? points[points.length - 1].time : 0;
+  // A result whose latest point is not recent means a download failed: keep it for a minute only, so it heals.
+  const complete = last > now - (step === "1d" ? 4 : 3) * DAY;
+  if (!complete) log.warn(`DXY ${step} history incomplete (${points.length} points, last ${last ? new Date(last).toISOString() : "none"}); will retry in 60 s`);
+  return { value: points, ttlMs: complete ? (step === "1d" ? 15 * 60_000 : 5 * 60_000) : 60_000 };
 }
 
-/** Load the series the Gold page and macro layer need, one after another, so the first visitor never triggers a burst. */
+const dxySeries: Record<"1h" | "1d", WarmSeries<SeriesPoint[]>> = {
+  "1h": new WarmSeries("US Dollar Index history", () => loadDxyHistory("1h")),
+  "1d": new WarmSeries("US Dollar Index history", () => loadDxyHistory("1d")),
+};
+
+/** Like the gold series: waits at most `waitMs` on a cold cache, then fails with WarmingError. */
+export function dxyHistory(step: "1h" | "1d", waitMs = REQUEST_WAIT_MS): Promise<SeriesPoint[]> {
+  return dxySeries[step].get(waitMs);
+}
+
+// ---------------------------------------------------------------------------------------------------
+// First-start warm-up
+// ---------------------------------------------------------------------------------------------------
+
+export interface WarmupStep {
+  id: string;
+  label: string;
+  state: "pending" | "running" | "done" | "failed";
+  ms: number | null;
+  error?: string;
+}
+
+const warmup = { firstRun: false, startedAt: 0, finishedAt: 0, steps: [] as WarmupStep[] };
+
+/** True when this machine has no downloaded gold history yet (a fresh clone, or a wiped data folder). */
+function archiveCacheIsEmpty(): boolean {
+  try {
+    return fs.readdirSync(path.join(config.dataDir, "cache", "dukascopy", "XAUUSD")).length < 5;
+  } catch {
+    return true;
+  }
+}
+
+/** Progress of the background download, for the first-start notice in the UI. */
+export function getWarmupStatus() {
+  return {
+    warming: warmup.startedAt > 0 && warmup.finishedAt === 0,
+    firstRun: warmup.firstRun,
+    startedAt: warmup.startedAt || null,
+    finishedAt: warmup.finishedAt || null,
+    steps: warmup.steps.map((s) => ({ ...s })),
+    files: dukascopy.progress(),
+  };
+}
+
+/**
+ * Loads everything the gold pages need in the background, most visible first: the quote, intraday
+ * charts, hourly charts, daily history, then the dollar index. Request handlers never wait for this.
+ */
 export async function prewarm(): Promise<void> {
   const t0 = Date.now();
-  const steps: [string, () => Promise<unknown>][] = [
-    ["XAUUSD 1d", () => getInstrumentCandles("XAUUSD", "1d", 600)],
-    ["XAUUSD 1h", () => getInstrumentCandles("XAUUSD", "1h", 600)],
-    ["XAUUSD 15m", () => getInstrumentCandles("XAUUSD", "15m", 600)],
-    ["XAUUSD 4h", () => getInstrumentCandles("XAUUSD", "4h", 600)],
-    ["DXY 1d", () => dxyHistory("1d")],
-    ["DXY 1h", () => dxyHistory("1h")],
+  const plan: [string, string, () => Promise<unknown>][] = [
+    ["quote", "gold price", () => recentDailyCandles(Infinity)],
+    ["intraday", "gold 5m and 15m charts", () => Promise.all([getInstrumentCandles("XAUUSD", "15m", 500, Infinity), getInstrumentCandles("XAUUSD", "5m", 500, Infinity)])],
+    ["hourly", "gold 1h chart", () => getInstrumentCandles("XAUUSD", "1h", 600, Infinity)],
+    ["daily", "gold daily and weekly history", () => Promise.all([getInstrumentCandles("XAUUSD", "1d", 500, Infinity), getInstrumentCandles("XAUUSD", "1w", 300, Infinity)])],
+    ["hourly-deep", "gold 4h chart and deep hourly history", () => Promise.all([getInstrumentCandles("XAUUSD", "4h", 600, Infinity), getInstrumentCandles("XAUUSD", "1h", 1000, Infinity), getInstrumentCandles("XAUUSD", "4h", 1000, Infinity)])],
+    ["dxy", "US Dollar Index history", () => Promise.all([dxyHistory("1h", Infinity), dxyHistory("1d", Infinity)])],
   ];
-  for (const [name, fn] of steps) {
+  warmup.firstRun = archiveCacheIsEmpty();
+  warmup.startedAt = t0;
+  warmup.finishedAt = 0;
+  warmup.steps = plan.map(([id, label]) => ({ id, label, state: "pending", ms: null }));
+  if (warmup.firstRun) log.info("first start on this machine: downloading spot-gold and FX history in the background (cached afterwards)");
+  for (let i = 0; i < plan.length; i++) {
+    const step = warmup.steps[i];
     const t = Date.now();
+    step.state = "running";
     try {
-      await fn();
-      log.info(`prewarm ${name} ok (${Date.now() - t} ms)`);
+      await plan[i][2]();
+      step.state = "done";
+      step.ms = Date.now() - t;
+      log.info(`prewarm ${step.label} ok (${step.ms} ms)`);
     } catch (err) {
-      log.warn(`prewarm ${name} failed: ${(err as Error).message}`);
+      step.state = "failed";
+      step.ms = Date.now() - t;
+      step.error = (err as Error).message;
+      log.warn(`prewarm ${step.label} failed: ${step.error}`);
     }
   }
-  log.info(`prewarm finished in ${Math.round((Date.now() - t0) / 1000)} s`);
+  warmup.finishedAt = Date.now();
+  log.info(`prewarm finished in ${Math.round((warmup.finishedAt - t0) / 1000)} s`);
 }
 
 export interface DxyData {
@@ -300,11 +413,20 @@ export interface DxyData {
   history1h: SeriesPoint[];
   archiveLastClose: SeriesPoint | null;
   computedVsArchivePct: number | null;
+  /** True while the archive history is still being downloaded for the first time (only the live value is available). */
+  historyWarming: boolean;
 }
 
-export async function getDxy(): Promise<DxyData> {
+export async function getDxy(waitMs = REQUEST_WAIT_MS): Promise<DxyData> {
   const now = Date.now();
-  const [d1, h1] = await Promise.all([dxyHistory("1d"), dxyHistory("1h")]);
+  let historyWarming = false;
+  const soft = (step: "1h" | "1d") =>
+    dxyHistory(step, waitMs).catch((err: unknown) => {
+      if (isWarming(err)) historyWarming = true;
+      else log.warn(`DXY ${step} history unavailable: ${(err as Error).message}`);
+      return [] as SeriesPoint[];
+    });
+  const [d1, h1] = await Promise.all([soft("1d"), soft("1h")]);
   const live = liveSampler.lastDxy ?? (await getLiveDxyFromSwissquote().catch(() => null));
   const archiveLast = h1.length ? h1[h1.length - 1] : d1.length ? d1[d1.length - 1] : null;
   // Append live hourly closes for hours the archive has not published.
@@ -324,6 +446,7 @@ export async function getDxy(): Promise<DxyData> {
     history1h,
     archiveLastClose: archiveLast,
     computedVsArchivePct: live && archiveLast ? ((live.value - archiveLast.value) / archiveLast.value) * 100 : null,
+    historyWarming,
     source: {
       provider: "dukascopy+swissquote",
       label: "US Dollar Index — ICE formula on live Swissquote FX (now) and the Dukascopy FX archive (history)",
@@ -331,7 +454,7 @@ export async function getDxy(): Promise<DxyData> {
       asOf: ts,
       quality,
       proxy: false,
-      note: `DXY = 50.14348112 × EURUSD^-0.576 × USDJPY^0.136 × GBPUSD^-0.119 × USDCAD^0.091 × USDSEK^0.042 × USDCHF^0.036, computed from bank quotes of the six constituents. It is the index definition itself, not the licensed ICE Data Services print, so it can differ from the ICE value by a few hundredths. ${open ? "FX market open." : "FX market closed; showing the last quotes."}`,
+      note: `DXY = 50.14348112 × EURUSD^-0.576 × USDJPY^0.136 × GBPUSD^-0.119 × USDCAD^0.091 × USDSEK^0.042 × USDCHF^0.036, computed from bank quotes of the six constituents. It is the index definition itself, not the licensed ICE Data Services print, so it can differ from the ICE value by a few hundredths. ${open ? "FX market open." : "FX market closed; showing the last quotes."}${historyWarming ? " The history is still being downloaded for the first time on this machine; only the live value is available yet." : ""}`,
       url: "https://www.theice.com/products/194/US-Dollar-Index-Futures",
     },
   };
@@ -340,6 +463,8 @@ export async function getDxy(): Promise<DxyData> {
 export interface GoldVerification {
   checkedAt: number;
   marketOpen: boolean;
+  /** True while the archive is still being downloaded for the first time: its rows are missing, not wrong. */
+  warming: boolean;
   spot: {
     swissquote: { price: number; ts: number } | null;
     goldApi: { price: number; ts: number } | null;
@@ -358,66 +483,79 @@ export interface GoldVerification {
   notes: string[];
 }
 
+/** Archive-only hourly bars for the verification row: never mixed with the live sampler. */
+const archiveHourly = new WarmSeries<Candle[]>("The spot-gold archive", async () => {
+  const hours = (await dukascopy.hourlySeries("XAUUSD", 1, Date.now())).filter((c) => c.volume > 0);
+  return { value: hours, ttlMs: hours.length ? 60_000 : 30_000 };
+});
+
 export async function getGoldVerification(): Promise<GoldVerification> {
-  const res = await cache.getOrLoad<GoldVerification>("gold:verification", 60_000, async () => {
-    const now = Date.now();
-    const open = isSpotMarketOpen(now);
-    const notes: string[] = [];
-    const [sq, ga, h1, dxy, synth, td] = await Promise.allSettled([
-      liveSampler.lastXau ? Promise.resolve(liveSampler.lastXau) : getSwissquoteQuote("XAU/USD"),
-      getGoldApiPrice(),
-      dukascopy.hourlySeries("XAUUSD", 1, now), // archive only — never mixed with the live sampler
-      getDxy(),
-      getSyntheticDxy(10),
-      config.hasTwelveData ? import("../providers/gold").then((m) => new m.TwelveDataGoldProvider().getQuote("XAUUSD")) : Promise.resolve(null),
-    ]);
-    const v = <T>(r: PromiseSettledResult<T>): T | null => (r.status === "fulfilled" ? r.value : null);
-    const sqq = v(sq);
-    const gaq = v(ga);
-    const hh = (v(h1) ?? []).filter((c) => c.volume > 0);
-    const dd = v(dxy);
-    const ss = v(synth);
-    const tdq = v(td);
-    const lastHour = hh.length ? hh[hh.length - 1] : null;
-    const spotPoints: number[] = [];
-    if (sqq) spotPoints.push(sqq.mid);
-    if (gaq) spotPoints.push(gaq.price);
-    if (lastHour) spotPoints.push(lastHour.close);
-    if (tdq) spotPoints.push(tdq.price);
-    const dev = (pts: number[]) => (pts.length >= 2 ? ((Math.max(...pts) - Math.min(...pts)) / (pts.reduce((a, b) => a + b, 0) / pts.length)) * 100 : null);
-    const spotDev = dev(spotPoints);
-    const spotStatus = spotDev === null ? "insufficient" : spotDev <= 0.5 ? "verified" : "divergent";
-    if (!open) notes.push("Spot market is closed; sources show their last quotes, which can differ slightly depending on each feed's closing time.");
-    if (spotStatus === "divergent") notes.push(`Spot sources differ by ${spotDev?.toFixed(2)}% — treat the price with caution until they converge.`);
-    if (spotStatus === "insufficient") notes.push("Fewer than two independent spot sources responded; the price could not be cross-checked.");
-    const dxyPts: number[] = [];
-    if (dd?.components) dxyPts.push(dd.value);
-    if (dd?.archiveLastClose) dxyPts.push(dd.archiveLastClose.value);
-    const dxyDev = dev(dxyPts);
-    const dxyStatus = dxyDev === null ? "insufficient" : dxyDev <= 0.3 ? "verified" : "divergent";
-    if (ss) notes.push(`ECB-fixing synthetic DXY (${ss.latest.toFixed(2)} on ${ss.points[ss.points.length - 1]?.date}) is a daily reference only and is not used for the live value.`);
-    if (!v(sq)) notes.push("Swissquote quote unavailable.");
-    if (!gaq) notes.push("gold-api.com unavailable.");
-    return {
-      checkedAt: now,
-      marketOpen: open,
-      spot: {
-        swissquote: sqq ? { price: sqq.mid, ts: sqq.ts } : null,
-        goldApi: gaq,
-        dukascopyLastClose: lastHour ? { price: lastHour.close, ts: lastHour.time + HOUR } : null,
-        twelveData: tdq ? { price: tdq.price, ts: tdq.source.asOf } : null,
-        maxDeviationPct: spotDev,
-        status: spotStatus,
-      },
-      dxy: {
-        live: dd?.components ? { value: dd.value, ts: dd.ts } : null,
-        archiveLastClose: dd?.archiveLastClose ? { value: dd.archiveLastClose.value, ts: dd.archiveLastClose.time } : null,
-        syntheticEcb: ss ? { value: ss.latest, date: ss.points[ss.points.length - 1]?.date ?? "" } : null,
-        maxDeviationPct: dxyDev,
-        status: dxyStatus,
-      },
-      notes,
-    };
-  });
-  return res.value;
+  const cached = cache.get<GoldVerification>("gold:verification");
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const now = Date.now();
+  const open = isSpotMarketOpen(now);
+  const notes: string[] = [];
+  let warming = false;
+  const [sq, ga, h1, dxy, synth, td] = await Promise.allSettled([
+    liveSampler.lastXau ? Promise.resolve(liveSampler.lastXau) : getSwissquoteQuote("XAU/USD"),
+    getGoldApiPrice(),
+    archiveHourly.get(REQUEST_WAIT_MS),
+    getDxy(),
+    getSyntheticDxy(10),
+    config.hasTwelveData ? import("../providers/gold").then((m) => new m.TwelveDataGoldProvider().getQuote("XAUUSD")) : Promise.resolve(null),
+  ]);
+  const v = <T>(r: PromiseSettledResult<T>): T | null => (r.status === "fulfilled" ? r.value : null);
+  if (h1.status === "rejected" && isWarming(h1.reason)) warming = true;
+  const sqq = v(sq);
+  const gaq = v(ga);
+  const hh = v(h1) ?? [];
+  const dd = v(dxy);
+  if (dd?.historyWarming) warming = true;
+  const ss = v(synth);
+  const tdq = v(td);
+  const lastHour = hh.length ? hh[hh.length - 1] : null;
+  const spotPoints: number[] = [];
+  if (sqq) spotPoints.push(sqq.mid);
+  if (gaq) spotPoints.push(gaq.price);
+  if (lastHour) spotPoints.push(lastHour.close);
+  if (tdq) spotPoints.push(tdq.price);
+  const dev = (pts: number[]) => (pts.length >= 2 ? ((Math.max(...pts) - Math.min(...pts)) / (pts.reduce((a, b) => a + b, 0) / pts.length)) * 100 : null);
+  const spotDev = dev(spotPoints);
+  const spotStatus = spotDev === null ? "insufficient" : spotDev <= 0.5 ? "verified" : "divergent";
+  if (warming) notes.push("The Dukascopy archive is still being downloaded for the first time on this machine, so its rows are missing for now.");
+  if (!open) notes.push("Spot market is closed; sources show their last quotes, which can differ slightly depending on each feed's closing time.");
+  if (spotStatus === "divergent") notes.push(`Spot sources differ by ${spotDev?.toFixed(2)}% — treat the price with caution until they converge.`);
+  if (spotStatus === "insufficient") notes.push("Fewer than two independent spot sources responded; the price could not be cross-checked.");
+  const dxyPts: number[] = [];
+  if (dd?.components) dxyPts.push(dd.value);
+  if (dd?.archiveLastClose) dxyPts.push(dd.archiveLastClose.value);
+  const dxyDev = dev(dxyPts);
+  const dxyStatus = dxyDev === null ? "insufficient" : dxyDev <= 0.3 ? "verified" : "divergent";
+  if (ss) notes.push(`ECB-fixing synthetic DXY (${ss.latest.toFixed(2)} on ${ss.points[ss.points.length - 1]?.date}) is a daily reference only and is not used for the live value.`);
+  if (!v(sq)) notes.push("Swissquote quote unavailable.");
+  if (!gaq) notes.push("gold-api.com unavailable.");
+  const result: GoldVerification = {
+    checkedAt: now,
+    marketOpen: open,
+    warming,
+    spot: {
+      swissquote: sqq ? { price: sqq.mid, ts: sqq.ts } : null,
+      goldApi: gaq,
+      dukascopyLastClose: lastHour ? { price: lastHour.close, ts: lastHour.time + HOUR } : null,
+      twelveData: tdq ? { price: tdq.price, ts: tdq.source.asOf } : null,
+      maxDeviationPct: spotDev,
+      status: spotStatus,
+    },
+    dxy: {
+      live: dd?.components ? { value: dd.value, ts: dd.ts } : null,
+      archiveLastClose: dd?.archiveLastClose ? { value: dd.archiveLastClose.value, ts: dd.archiveLastClose.time } : null,
+      syntheticEcb: ss ? { value: ss.latest, date: ss.points[ss.points.length - 1]?.date ?? "" } : null,
+      maxDeviationPct: dxyDev,
+      status: dxyStatus,
+    },
+    notes,
+  };
+  // While the archive is still downloading the result is refreshed quickly instead of being kept for a minute.
+  cache.set("gold:verification", result, warming ? 5_000 : 60_000);
+  return result;
 }

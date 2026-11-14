@@ -6,6 +6,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The server answers "202 Accepted" with `warming: true` while data is being downloaded for the first
+ * time on this machine. That is "not ready yet", not a failure: queries keep their loading state and
+ * ask again.
+ */
+export function isWarmingError(error: unknown): boolean {
+  return error instanceof ApiError && (error.body as { warming?: unknown } | null | undefined)?.warming === true;
+}
+
+/** Progress of the one-time history download (GET /api/status/warmup). */
+export interface WarmupStatus {
+  warming: boolean;
+  firstRun: boolean;
+  startedAt: number | null;
+  finishedAt: number | null;
+  steps: { id: string; label: string; state: "pending" | "running" | "done" | "failed"; ms: number | null; error?: string }[];
+  files: { downloaded: number; failed: number; active: number; queued: number };
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, { method, headers: body !== undefined ? { "content-type": "application/json" } : undefined, body: body !== undefined ? JSON.stringify(body) : undefined });
   const text = await res.text();
@@ -19,6 +38,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     const msg = (data as { error?: string })?.error ?? `${res.status} ${res.statusText}`;
     throw new ApiError(res.status, msg, data);
   }
+  // 202 + `warming` is the server saying "not ready yet": surface it as a (retryable) error, never as data.
+  if (res.status === 202 && (data as { warming?: unknown } | null)?.warming === true) throw new ApiError(202, (data as { error?: string }).error ?? "Data is still being prepared", data);
   return data as T;
 }
 
@@ -137,6 +158,8 @@ export interface LiquidationsSummary {
 
 export interface OverviewResponse {
   generatedAt: number;
+  /** Gold parts are missing because their history is still being downloaded for the first time. */
+  warming?: boolean;
   quotes: Quote[];
   global: GlobalMarket | { error: string } | null;
   fearGreed: FearGreed | { error: string } | null;
@@ -197,6 +220,8 @@ export type GoldRegimeResponse = RegimeResponse<GoldRegimeResult>;
 export interface SetupsResponse {
   setups: TradeSetup[];
   errors: Record<string, string>;
+  /** Assets whose history is still being downloaded for the first time. */
+  warming?: string[];
   timeframe: Timeframe;
   generatedAt: number;
 }
@@ -225,6 +250,7 @@ export interface NewsResponse {
 
 export interface IntelResponse {
   generatedAt: number;
+  warming?: boolean;
   crypto: {
     btcStructure: { price: number; bias: string; alignment: string; summary: string[]; keySupport: number | null; keyResistance: number | null; perTimeframe: { timeframe: Timeframe; bias: string; trend: string; notes: string[] }[]; sources: DataSource[] } | null;
     altStrength: { breadth24hPct: number | null; breadth7dPct: number | null; altsOutperformingBtc24h: string | null; leaders: { symbol: string; change24hPct: number | null; change7dPct: number | null }[]; laggards: { symbol: string; change24hPct: number | null; change7dPct: number | null }[]; source: DataSource | null; why: string };
@@ -370,6 +396,7 @@ export interface BacktestResponse {
 export interface GoldVerification {
   checkedAt: number;
   marketOpen: boolean;
+  warming?: boolean;
   spot: { swissquote: { price: number; ts: number } | null; goldApi: { price: number; ts: number } | null; dukascopyLastClose: { price: number; ts: number } | null; twelveData: { price: number; ts: number } | null; maxDeviationPct: number | null; status: "verified" | "divergent" | "insufficient" };
   dxy: { live: { value: number; ts: number } | null; archiveLastClose: { value: number; ts: number } | null; syntheticEcb: { value: number; date: string } | null; maxDeviationPct: number | null; status: "verified" | "divergent" | "insufficient" };
   notes: string[];
@@ -380,6 +407,7 @@ export interface GoldInstruments {
   futures: { kind: string; quote: null; note: string };
   archiveLastDaily: Candle | null;
   sampler: { lastSampleAt: number; lastError: string | null };
+  warming?: boolean;
 }
 export interface SeriesPoint {
   time: number;
@@ -395,6 +423,8 @@ export interface DxyResponse {
   computedVsArchivePct: number | null;
   history1h: SeriesPoint[];
   history1d: SeriesPoint[];
+  /** The history is still being downloaded for the first time; only the live value is available. */
+  warming?: boolean;
 }
 
 export function qs(params: Record<string, string | number | boolean | undefined | null>): string {

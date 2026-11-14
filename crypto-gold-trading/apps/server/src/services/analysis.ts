@@ -32,6 +32,7 @@ import {
 } from "@terminal/core";
 import { cache } from "../lib/cache";
 import { logger } from "../lib/logger";
+import { isWarming } from "../lib/warming";
 import { market, CANDLE_LIMITS } from "./market";
 import { assets } from "./assets";
 
@@ -222,15 +223,19 @@ export async function getSetup(assetId: AssetId, timeframe: Timeframe, sizing?: 
   return res.value;
 }
 
-export async function getSetupsFor(assets: AssetId[], timeframe: Timeframe, sizing?: { accountBalance: number; riskPct: number }): Promise<{ setups: TradeSetup[]; errors: Record<string, string> }> {
+export async function getSetupsFor(assets: AssetId[], timeframe: Timeframe, sizing?: { accountBalance: number; riskPct: number }): Promise<{ setups: TradeSetup[]; errors: Record<string, string>; warming: AssetId[] }> {
   const errors: Record<string, string> = {};
+  const warming: AssetId[] = [];
   const results = await Promise.allSettled(assets.map((a) => getSetup(a, timeframe, sizing)));
   const setups: TradeSetup[] = [];
   results.forEach((r, i) => {
     if (r.status === "fulfilled") setups.push(r.value.primary);
-    else errors[assets[i]] = (r.reason as Error).message;
+    else {
+      errors[assets[i]] = (r.reason as Error).message;
+      if (isWarming(r.reason)) warming.push(assets[i]);
+    }
   });
   const rank = (s: TradeSetup) => (s.status === "NO TRADE" ? -1 : s.qualityScore);
   setups.sort((a, b) => rank(b) - rank(a));
-  return { setups, errors };
+  return { setups, errors, warming };
 }

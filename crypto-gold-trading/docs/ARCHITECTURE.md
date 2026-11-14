@@ -28,7 +28,9 @@ crypto-gold-trading/
 │  │                       assets (live universe: Binance pairs + CoinGecko enrichment, search),
 │  │                       analysis (wires core engines to data), ai (Claude + grounding),
 │  │                       liquidations (force-order stream), alerts, user state
-│  ├─ lib/                 env (root .env / .env.local loader), origin guard (local pages only:
+│  ├─ lib/                 warming (bounded waits: "still downloading" is answered in seconds and
+│  │                       never replaced by demo data), env (root .env / .env.local loader),
+│  │                       origin guard (local pages only:
 │  │                       Host allowlist, Origin check, ALLOWED_ORIGINS), cache, http, logger, JSON store,
 │  │                       backtest runner (worker thread; bundled with esbuild in dev, where
 │  │                       tsx cannot load a TypeScript worker; main-thread fallback)

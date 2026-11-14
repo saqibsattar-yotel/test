@@ -47,6 +47,14 @@ describe("API access control (real server, default policy: this machine only)", 
     expect(localPreflight.headers["access-control-allow-origin"]).toBe(LOCAL);
   });
 
+  it("reports route errors with their real message, in the shape the web client reads", async () => {
+    // A body-parsing failure inside a plugin route is handled by the error handler (no network involved).
+    const invalid = await app.inject({ method: "POST", url: "/api/backtest", headers: { "content-type": "application/json" }, payload: "{ not json" });
+    expect(invalid.statusCode).toBe(400);
+    expect(typeof invalid.json().error).toBe("string");
+    expect(invalid.json().message).toBeUndefined(); // not Fastify's generic { statusCode, error, message } body
+  });
+
   it("refuses DNS rebinding (unknown name in Host) and cross-site subresource requests", async () => {
     const rebinding = await app.inject({ method: "GET", url: "/api/features", headers: { host: "evil.example:8787" } });
     expect(rebinding.statusCode).toBe(403);

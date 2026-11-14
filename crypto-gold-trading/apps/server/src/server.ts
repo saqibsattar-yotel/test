@@ -6,6 +6,7 @@ import websocket from "@fastify/websocket";
 import { config, featureFlags, loadedEnvFiles, repoRoot } from "./config";
 import { logger } from "./lib/logger";
 import { isAllowedOrigin, registerOriginGuard, type OriginPolicy } from "./lib/origin-guard";
+import { isWarming } from "./lib/warming";
 import { cache } from "./lib/cache";
 import { marketRoutes } from "./routes/market";
 import { analysisRoutes } from "./routes/analysis";
@@ -19,7 +20,7 @@ import { monitorRoutes } from "./routes/monitor";
 import { backtestRoutes } from "./routes/backtest";
 import { assets } from "./services/assets";
 import { monitor } from "./services/monitor";
-import { liveSampler, getGoldVerification, getDxy, getInstrumentCandles, prewarm as prewarmGold } from "./services/gold";
+import { liveSampler, getGoldVerification, getDxy, getInstrumentCandles, getWarmupStatus, prewarm as prewarmGold } from "./services/gold";
 import { market } from "./services/market";
 import { hub } from "./ws/hub";
 import { liquidations } from "./services/liquidations";
@@ -29,6 +30,18 @@ const log = logger("server");
 
 export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 20 * 1024 * 1024, forceCloseConnections: true });
+  // Installed before any route: Fastify binds the error handler to a route when the route is defined, so a
+  // handler set afterwards would never be used (responses would fall back to Fastify's generic format).
+  app.setErrorHandler((err, _req, reply) => {
+    if (isWarming(err)) {
+      // Not a failure: the data is still being downloaded for the first time. "202 Accepted" tells the UI to keep
+      // loading and ask again, without the browser logging an error for every poll.
+      return reply.code(202).header("Retry-After", "5").header("Cache-Control", "no-store").send({ warming: true, error: (err as Error).message });
+    }
+    log.error("request failed", err);
+    reply.code((err as { statusCode?: number }).statusCode ?? 500).send({ error: (err as Error).message ?? "internal error" });
+  });
+
   // The API has no login: only pages served from this machine (or origins listed in ALLOWED_ORIGINS) may
   // call it. The guard runs first, for HTTP requests and WebSocket handshakes alike; CORS headers are then
   // granted to exactly the origins the guard lets through.
@@ -41,10 +54,12 @@ export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
 
   app.get("/api/health", async () => ({ ok: true, time: Date.now(), cache: cache.stats(), upstream: hub.status(), features: featureFlags() }));
   app.get("/api/features", async () => featureFlags());
+  // Progress of the one-time history download on a machine that has never run the terminal.
+  app.get("/api/status/warmup", async () => getWarmupStatus());
   app.get("/api/market/gold/verification", async () => getGoldVerification());
   app.get("/api/market/dxy", async () => {
     const d = await getDxy();
-    return { value: d.value, ts: d.ts, quality: d.quality, source: d.source, components: d.components, archiveLastClose: d.archiveLastClose, computedVsArchivePct: d.computedVsArchivePct, history1h: d.history1h.slice(-300), history1d: d.history1d.slice(-400) };
+    return { value: d.value, ts: d.ts, quality: d.quality, source: d.source, components: d.components, archiveLastClose: d.archiveLastClose, computedVsArchivePct: d.computedVsArchivePct, history1h: d.history1h.slice(-300), history1d: d.history1d.slice(-400), warming: d.historyWarming };
   });
   app.get("/api/market/gold/instruments", async () => {
     const [spot, paxg, dukaDaily] = await Promise.allSettled([market.getQuotes(["XAUUSD"]), market.getQuotes(["PAXGUSD"]), getInstrumentCandles("XAUUSD", "1d", 2)]);
@@ -58,6 +73,7 @@ export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
       futures: { kind: "COMEX gold futures (GC) — 100 troy oz, $0.10 tick = $10; MGC micro 10 oz", quote: null, note: "Live GC quotes need a licensed futures feed (e.g. a Twelve Data/CME-enabled plan). Contract specifications are available in the Risk Calculator; no price is fabricated here." },
       archiveLastDaily: prev,
       sampler: liveSamplerState,
+      warming: (spot.status === "fulfilled" && !s) || (dukaDaily.status === "rejected" && isWarming(dukaDaily.reason)),
     };
   });
 
@@ -96,10 +112,6 @@ export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
     log.info(`serving web app from ${dist}`);
   }
 
-  app.setErrorHandler((err, _req, reply) => {
-    log.error("request failed", err);
-    reply.code((err as { statusCode?: number }).statusCode ?? 500).send({ error: (err as Error).message ?? "internal error" });
-  });
   return app;
 }
 
@@ -108,7 +120,7 @@ async function main() {
   const app = await buildServer();
   assets.start();
   liveSampler.start();
-  setTimeout(() => void prewarmGold(), 4000);
+  setTimeout(() => void prewarmGold(), 1000);
   hub.start();
   liquidations.start();
   alerts.start();

@@ -10,6 +10,7 @@ import { NAV } from "./nav";
 import { CommandPalette } from "./CommandPalette";
 import { AlertsDrawer } from "./AlertsDrawer";
 import { Onboarding } from "./Onboarding";
+import { FirstStartNotice } from "./FirstStartNotice";
 
 function useClock(zone: string) {
   const [now, setNow] = useState(Date.now());
@@ -159,6 +160,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </IconButton>
           </div>
         </header>
+        <FirstStartNotice />
 
         <main className="flex-1 w-full max-w-[1680px] mx-auto px-3 sm:px-4 lg:px-6 py-4 lg:py-6 pb-24 md:pb-8 min-w-0">{children}</main>
 

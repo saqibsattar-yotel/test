@@ -49,14 +49,22 @@ only approximately. Everything here is also surfaced in the UI next to the affec
 - The asset registry is rebuilt from today's Binance listing: delisted coins are not available, which is
   a survivorship bias for any multi-asset statistics.
 
-### Archive loading
+### Archive loading and first start
 - Dukascopy files are fetched with at most three parallel downloads (the CDN answers bursts with
-  HTTP 503; transient errors are retried with backoff). The server pre-warms spot gold and the dollar
-  index at start-up; on a machine with an empty cache that first pre-warm takes about five to six
-  minutes (two years of daily bars for six FX pairs), during which the DXY panels show a short-TTL
-  partial result and heal automatically. Completed periods are cached as JSON under
-  `data/cache/dukascopy/` and never re-fetched, so later starts are instant; the current period is
-  re-checked every 5–10 minutes.
+  HTTP 503; transient errors are retried with backoff, and a file that just failed is left alone for
+  20 seconds). Completed periods are cached as JSON under `data/cache/dukascopy/` and never
+  re-fetched, so later starts are instant; the current period is re-checked every 5–10 minutes.
+- On a machine with an empty cache (a fresh clone) about 170 files are downloaded once, most visible
+  first: the gold price, intraday charts, hourly, daily, then the dollar index. Measured on a clean
+  clone this took 45 seconds when the archive was responsive and about 9 minutes when it was
+  throttling; the gold price appeared after roughly 10 and 70 seconds respectively.
+- No request waits for that download. Gold endpoints answer `202 Accepted` with `warming: true` after
+  at most 2.5 seconds, the UI keeps its loading state and asks again, composite answers (overview,
+  setups, intelligence) are returned without their gold part and refreshed every few seconds, and
+  nothing is replaced by demo data while warming. The dollar index shows its live value immediately
+  and falls back to the ECB-fixing series for history until its own history has arrived.
+- If the archive is unreachable altogether, gold charts fall back to labelled DEMO data like any other
+  failed provider, and the quote is shown without a meaningful change figure (its note says so).
 - The last bar of a session can be a single closing quote captured from the live feed (e.g. the
   Friday 22:00 UTC quote), which is why it may show open = close and a volume of one tick.
 

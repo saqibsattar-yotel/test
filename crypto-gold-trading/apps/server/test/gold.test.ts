@@ -5,7 +5,7 @@ import lzma from "lzma";
 import type { Candle } from "@terminal/core";
 import { DECIMALS, aggregate, decodeCandles, decodeTicksToMinutes } from "../src/providers/dukascopy";
 import { dxyFromRates, isSpotMarketOpen } from "../src/providers/swissquote";
-import { aggregateWeekly, mergeLive } from "../src/services/gold";
+import { aggregateWeekly, depthFor, mergeLive } from "../src/services/gold";
 
 function lzmaDecompress(buf: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -120,5 +120,25 @@ describe("US Dollar Index", () => {
     expect(isSpotMarketOpen(Date.UTC(2026, 10, 8, 21, 59))).toBe(false); // Sunday before open
     expect(isSpotMarketOpen(Date.UTC(2026, 10, 8, 22))).toBe(true); // Sunday open
     expect(isSpotMarketOpen(Date.UTC(2026, 10, 4, 3))).toBe(true); // Wednesday
+  });
+});
+
+describe("archive depth tiers", () => {
+  it("serves every requested bar count from a small, fixed set of shared series", () => {
+    expect(depthFor("1d", 500)).toBe(0);
+    expect(depthFor("1w", 300)).toBe(0);
+    expect(depthFor("1h", 48)).toBe(2); // months
+    expect(depthFor("1h", 600)).toBe(2);
+    expect(depthFor("1h", 1000)).toBe(5);
+    expect(depthFor("4h", 600)).toBe(5);
+    expect(depthFor("4h", 1000)).toBe(8);
+    expect(depthFor("4h", 3000)).toBe(12);
+    expect(depthFor("5m", 500)).toBe(5); // calendar days
+    expect(depthFor("15m", 500)).toBe(12);
+    expect(depthFor("15m", 600)).toBe(12);
+    expect(depthFor("15m", 3000)).toBe(35);
+    const tiers = new Set<string>();
+    for (const tf of ["5m", "15m", "1h", "4h", "1d", "1w"] as const) for (let limit = 50; limit <= 3000; limit += 50) tiers.add(`${tf}:${depthFor(tf, limit)}`);
+    expect(tiers.size).toBeLessThanOrEqual(16); // bounded, however many different limits clients ask for
   });
 });

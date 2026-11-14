@@ -17,6 +17,9 @@ Architecture and risk methodology are adapted from
 
 ## Quick start
 
+Requires Node.js 20 or newer (`nvm use` picks it up from `.nvmrc`). Nothing else: no database, no
+API keys, no `.env` needed. A fresh clone runs on macOS, Linux and Windows with:
+
 ```bash
 npm install
 cp .env.example .env        # optional keys; everything runs keyless
@@ -24,6 +27,13 @@ npm run dev                 # server on :8787, web on :5173 (proxied)
 ```
 
 Open http://localhost:5173. First run shows a short guided setup.
+
+First start on a new computer: crypto is live within seconds. Spot-gold and dollar-index history is
+downloaded once in the background from a public archive (usually under a minute, several minutes when
+the archive is slow). The app stays fully usable meanwhile, shows a "First start on this computer"
+notice with progress, and fills the gold panels in as each part arrives. The download is cached under
+`data/cache/`, so every later start is instant. With a free `TWELVEDATA_API_KEY` gold quotes and charts
+come from Twelve Data and do not wait for the archive at all.
 
 Development notes:
 

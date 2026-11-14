@@ -9,6 +9,7 @@ import { config } from "../config";
 import { cache } from "../lib/cache";
 import { logger } from "../lib/logger";
 import { JsonStore } from "../lib/store";
+import { isWarming } from "../lib/warming";
 import { BinanceFuturesProvider, BinanceSpotProvider } from "../providers/binance";
 import { BybitProvider, CoinbaseProvider } from "../providers/fallbacks";
 import { getGlobal, getTopCoins, STABLE_OR_WRAPPED, type CoinMarket, type GlobalMarket } from "../providers/coingecko";
@@ -64,6 +65,7 @@ export class MarketDataService {
             if (r.candles.length === 0) throw new Error("empty candle set");
             return r;
           } catch (err) {
+            if (isWarming(err)) throw err; // first-start download in progress: not a provider failure
             lastErr = err;
             log.warn(`${p.id} candles failed for ${assetId} ${timeframe}: ${(err as Error).message}`);
           }
@@ -74,6 +76,8 @@ export class MarketDataService {
       const source: DataSource = res.stale ? { ...res.value.source, quality: "stale", note: `${res.value.source.note ?? ""} Cached copy; upstream refresh failed.`.trim() } : res.value.source;
       return { candles: res.value.candles, source, assetId, timeframe, warnings };
     } catch (err) {
+      // Data that is merely still downloading is never replaced by demo data: the caller retries.
+      if (isWarming(err)) throw err;
       if (config.DEMO_MODE === "off") throw err;
       log.error(`All providers failed for ${assetId} ${timeframe}; serving DEMO data`, err);
       return { ...this.demoCandles(assetId, timeframe, limit, (err as Error).message), assetId, timeframe, warnings: [`Live data unavailable (${(err as Error).message}). Showing DEMO data.`] };
@@ -82,6 +86,12 @@ export class MarketDataService {
 
   /** Up to `bars` candles (max 3000) by paging backwards; used by the backtester. */
   async getCandlesExtended(assetId: AssetId, timeframe: Timeframe, bars: number): Promise<CandlePayload> {
+    if (assetId === "XAUUSD" && !config.hasTwelveData && config.DEMO_MODE !== "force") {
+      // A backtest is an explicit, long-running request: wait for the archive (bounded) rather than
+      // answering "still downloading" after a couple of seconds.
+      const r = await this.goldSpot.getCandles(assetId, timeframe, bars, 90_000);
+      return { ...r, assetId, timeframe, warnings: [], source: { ...r.source, note: `${r.source.note ?? ""} Extended history from the Dukascopy archive (${r.candles.length} bars).`.trim() } };
+    }
     const first = await this.getCandles(assetId, timeframe, Math.min(1000, bars));
     if (first.source.quality === "demo" || first.candles.length >= bars) return first;
     if (assetId === "XAUUSD") {
@@ -115,8 +125,9 @@ export class MarketDataService {
     if (config.DEMO_MODE === "force") return assetIds.map((a) => this.demoQuote(a));
     const key = `quotes:${assetIds.slice().sort().join(",")}`;
     try {
-      const res = await cache.getOrLoad<Quote[]>(key, 5_000, async () => {
+      const res = await cache.getOrLoad<{ quotes: Quote[]; warming: AssetId[] }>(key, 5_000, async () => {
         const out: Quote[] = [];
+        const warming: AssetId[] = [];
         const crypto = assetIds.filter((a) => a !== "XAUUSD");
         if (crypto.length) {
           try {
@@ -130,15 +141,19 @@ export class MarketDataService {
           }
         }
         if (assetIds.includes("XAUUSD")) {
-          const q = await this.quoteWithFallback("XAUUSD").catch(() => null);
-          if (q) out.push(q);
+          try {
+            out.push(await this.quoteWithFallback("XAUUSD"));
+          } catch (err) {
+            if (isWarming(err)) warming.push("XAUUSD");
+          }
         }
-        if (out.length === 0) throw new Error("no quotes from any provider");
-        return out;
+        if (out.length === 0 && warming.length === 0) throw new Error("no quotes from any provider");
+        return { quotes: out, warming };
       });
-      const quotes = res.value.map((q) => (res.stale ? { ...q, source: { ...q.source, quality: "stale" as const } } : q));
-      // Fill in any asset that is missing with demo (auto) or omit (off)
-      if (config.DEMO_MODE === "auto") for (const a of assetIds) if (!quotes.some((q) => q.assetId === a)) quotes.push(this.demoQuote(a));
+      const quotes = res.value.quotes.map((q) => (res.stale ? { ...q, source: { ...q.source, quality: "stale" as const } } : q));
+      // Fill in any asset that is missing with demo (auto) or omit (off). An asset whose data is still being
+      // downloaded for the first time is left out instead: it is not unavailable, and a demo price would mislead.
+      if (config.DEMO_MODE === "auto") for (const a of assetIds) if (!quotes.some((q) => q.assetId === a) && !res.value.warming.includes(a)) quotes.push(this.demoQuote(a));
       return quotes;
     } catch (err) {
       if (config.DEMO_MODE === "off") throw err;

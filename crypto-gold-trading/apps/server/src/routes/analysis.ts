@@ -6,7 +6,8 @@ import { market } from "../services/market";
 import { liquidations } from "../services/liquidations";
 import { getCalendar } from "./content";
 import { getNews } from "./content";
-import { narrate } from "../services/ai";
+import { narrate, ruleBasedNarrative } from "../services/ai";
+import { isWarming } from "../lib/warming";
 import { getSettings } from "../services/user";
 import { cache } from "../lib/cache";
 import { parseAssets } from "./market";
@@ -50,8 +51,8 @@ export async function analysisRoutes(app: FastifyInstance) {
     hub.ensureSubscribed(ids);
     const balance = parseFloat(q.balance ?? "") || settings.accountBalance;
     const risk = parseFloat(q.risk ?? "") || settings.defaultRiskPct;
-    const { setups, errors } = await getSetupsFor(ids, tf.data, { accountBalance: balance, riskPct: risk });
-    return { setups, errors, timeframe: tf.data, generatedAt: Date.now() };
+    const { setups, errors, warming } = await getSetupsFor(ids, tf.data, { accountBalance: balance, riskPct: risk });
+    return { setups, errors, warming, timeframe: tf.data, generatedAt: Date.now() };
   });
 
   app.get("/api/setups/:assetId", async (req, reply) => {
@@ -69,13 +70,17 @@ export async function analysisRoutes(app: FastifyInstance) {
     return { ...res, explanation: explainSetup(res.primary) };
   });
 
+  // While gold history is still being downloaded for the first time these answer without their gold parts
+  // (`warming: true`); such a partial answer is kept for a few seconds only, not for the full cache period.
   app.get("/api/overview", async () => {
     const res = await cache.getOrLoad("overview", 60_000, buildOverview);
+    if (res.value.warming && !res.fromCache) cache.set("overview", res.value, 10_000);
     return res.value;
   });
 
   app.get("/api/intel", async () => {
     const res = await cache.getOrLoad("intel", 120_000, buildIntel);
+    if (res.value.warming && !res.fromCache) cache.set("intel", res.value, 10_000);
     return res.value;
   });
 }
@@ -98,6 +103,7 @@ async function buildOverview() {
     getNews("all"),
   ]);
   const v = <T>(r: PromiseSettledResult<T>): T | null => (r.status === "fulfilled" ? r.value : null);
+  const warming = [gold, goldCandles].some((r) => r.status === "rejected" && isWarming(r.reason));
   const q = v(quotes) ?? [];
   const g = v(global);
   const f = v(fng);
@@ -142,13 +148,17 @@ async function buildOverview() {
   if (f && !("error" in f)) fallback.push(`Crypto Fear & Greed reads ${f.value} (${f.classification}).`);
   if (avgFunding !== null) fallback.push(`Average perpetual funding across majors is ${(avgFunding * 100).toFixed(4)}% per 8h.`);
   if (upcoming.length) fallback.push(`Next scheduled catalysts: ${upcoming.slice(0, 3).map((e) => `${e.title} (${new Date(e.time).toUTCString()})`).join("; ")}.`);
-  const briefing = await narrate({ kind: "briefing", facts, fallback, factsAsOf: now, instruction: "Write the daily market briefing for a crypto and gold trader from this fact sheet. Lead with the regime read, then what matters today, then the scheduled risks. Mention data caveats (proxy/demo/stale) first if any.", effort: "medium", maxTokens: 1500, cacheTtlMs: 30 * 60_000 });
+  // No language-model call for a briefing that is still missing its gold half.
+  const briefing = warming
+    ? ruleBasedNarrative(fallback, now, "Gold data is still being downloaded for the first time on this machine; the full briefing follows once it is ready.")
+    : await narrate({ kind: "briefing", facts, fallback, factsAsOf: now, instruction: "Write the daily market briefing for a crypto and gold trader from this fact sheet. Lead with the regime read, then what matters today, then the scheduled risks. Mention data caveats (proxy/demo/stale) first if any.", effort: "medium", maxTokens: 1500, cacheTtlMs: 30 * 60_000 });
   const sources: DataSource[] = [];
   for (const x of q) sources.push(x.source);
   if (g && !("error" in g)) sources.push(g.source);
   if (f && !("error" in f)) sources.push(f.source);
   return {
     generatedAt: now,
+    warming,
     quotes: q,
     global: g,
     fearGreed: f,
@@ -180,6 +190,7 @@ async function buildIntel() {
     getGoldRegime(),
   ]);
   const v = <T>(r: PromiseSettledResult<T>): T | null => (r.status === "fulfilled" ? r.value : null);
+  const warming = gr.status === "rejected" && isWarming(gr.reason);
   const t = v(top);
   const coins = t && !("error" in t) ? t.coins : [];
   const alts = coins.filter((c) => c.symbol !== "BTC" && c.change24hPct !== null);
@@ -199,6 +210,7 @@ async function buildIntel() {
   const m = v(macro);
   const liq = liquidations.summary(24 * 3_600_000);
   return {
+    warming,
     generatedAt: now,
     crypto: {
       btcStructure: b ? { price: b.price, bias: b.mtf.overallBias, alignment: b.mtf.alignment, summary: b.mtf.summary, keySupport: b.mtf.keySupport, keyResistance: b.mtf.keyResistance, perTimeframe: b.mtf.perTimeframe.map((p) => ({ timeframe: p.timeframe, bias: p.bias, trend: p.trend, notes: p.notes.slice(0, 3) })), sources: b.sources } : null,

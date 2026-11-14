@@ -44,7 +44,7 @@ async function fetchBi5(relPath: string): Promise<Buffer | null> {
   let delay = 1500;
   for (let attempt = 1; ; attempt++) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 90_000);
+    const timer = setTimeout(() => ctrl.abort(), 45_000);
     try {
       const res = await fetch(`${BASE}/${relPath}`, { headers: { "User-Agent": UA }, signal: ctrl.signal });
       if (res.status === 404) return null;
@@ -55,7 +55,7 @@ async function fetchBi5(relPath: string): Promise<Buffer | null> {
     } catch (err) {
       const e = err as Error;
       const transient = e instanceof TransientError || e.name === "AbortError" || /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket|terminated/i.test(e.message);
-      if (!transient || attempt >= 4) throw e;
+      if (!transient || attempt >= 3) throw e;
       await sleep(delay + Math.random() * 500);
       delay *= 2;
     } finally {
@@ -106,18 +106,63 @@ class DukascopyClient {
   private cacheDir = path.join(config.dataDir, "cache", "dukascopy");
   private inflight = new Map<string, Promise<Candle[] | null>>();
   private memo = new Map<string, { at: number; value: Candle[] | null }>();
+  /** Recently failed downloads: not requested again for a short while, so a struggling CDN is not hammered. */
+  private failures = new Map<string, { at: number; message: string }>();
+  private readonly failureBackoffMs = 20_000;
   private active = 0;
-  private queue: (() => void)[] = [];
+  private seq = 0;
+  private queue: { resolve: () => void; priority: number; seq: number }[] = [];
   private readonly concurrency = 3; // the CDN starts returning 503 well before 6 parallel downloads
+  /**
+   * Network downloads since start (cache hits are not counted). `misses` also counts loads skipped
+   * because the same file failed moments ago: a series built during a miss is incomplete.
+   */
+  readonly stats = { downloaded: 0, failed: 0, misses: 0 };
 
-  private async limit<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.concurrency) await new Promise<void>((r) => this.queue.push(r));
-    this.active++;
+  /** Download counters for the first-start progress display. */
+  progress() {
+    return { downloaded: this.stats.downloaded, failed: this.stats.failed, active: this.active, queued: this.queue.length };
+  }
+
+  /**
+   * Downloads are slow (several seconds each) and limited to three at a time, so order matters on a
+   * machine with an empty cache: spot gold before FX, and recent files (the quote, intraday charts)
+   * before old ones. Higher priority runs first; equal priority is first come, first served.
+   */
+  private priorityOf(instrument: string, relPath: string, periodEnd: number): number {
+    const kind = relPath.includes("min_1") || relPath.includes("ticks") ? 30 : relPath.includes("hour_1") ? 20 : 10;
+    const ageDays = Math.min(3650, Math.max(0, (Date.now() - periodEnd) / DAY));
+    return (instrument === "XAUUSD" ? 100 : 0) + kind - ageDays / 10_000;
+  }
+
+  private acquire(priority: number): Promise<void> {
+    if (this.active < this.concurrency) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => this.queue.push({ resolve, priority, seq: this.seq++ }));
+  }
+
+  private release() {
+    if (this.queue.length === 0) {
+      this.active--;
+      return;
+    }
+    let best = 0;
+    for (let i = 1; i < this.queue.length; i++) {
+      const a = this.queue[i];
+      const b = this.queue[best];
+      if (a.priority > b.priority || (a.priority === b.priority && a.seq < b.seq)) best = i;
+    }
+    this.queue.splice(best, 1)[0].resolve(); // the slot is handed over, so `active` stays the same
+  }
+
+  private async limit<T>(priority: number, fn: () => Promise<T>): Promise<T> {
+    await this.acquire(priority);
     try {
       return await fn();
     } finally {
-      this.active--;
-      this.queue.shift()?.();
+      this.release();
     }
   }
 
@@ -131,6 +176,11 @@ class DukascopyClient {
     if (memo && ((immutable && memo.value !== null) || Date.now() - memo.at < (memo.value === null ? nullTtl : 5 * 60_000))) return memo.value;
     const existing = this.inflight.get(key);
     if (existing) return existing;
+    const failure = this.failures.get(key);
+    if (failure && Date.now() - failure.at < this.failureBackoffMs) {
+      this.stats.misses++;
+      throw new Error(failure.message);
+    }
     const p = (async () => {
       const file = path.join(this.cacheDir, instrument, relPath.replace(/\//g, "_") + ".json");
       if (immutable) {
@@ -142,13 +192,22 @@ class DukascopyClient {
           /* not cached */
         }
       }
-      const value = await this.limit(async () => {
-        const buf = await fetchBi5(`${instrument}/${relPath}`);
-        if (!buf) return null;
-        const raw = await lzmaDecompress(buf);
-        const dec = DECIMALS[instrument] ?? 1000;
-        return kind === "candles" ? decodeCandles(raw, baseTime, dec) : decodeTicksToMinutes(raw, baseTime, dec);
+      const value = await this.limit(this.priorityOf(instrument, relPath, periodEnd), async () => {
+        try {
+          const buf = await fetchBi5(`${instrument}/${relPath}`);
+          this.stats.downloaded++;
+          if (!buf) return null;
+          const raw = await lzmaDecompress(buf);
+          const dec = DECIMALS[instrument] ?? 1000;
+          return kind === "candles" ? decodeCandles(raw, baseTime, dec) : decodeTicksToMinutes(raw, baseTime, dec);
+        } catch (err) {
+          this.stats.failed++;
+          this.stats.misses++;
+          this.failures.set(key, { at: Date.now(), message: (err as Error).message });
+          throw err;
+        }
       });
+      this.failures.delete(key);
       this.memo.set(key, { at: Date.now(), value });
       // Persist decoded immutable files; a 404 is persisted only once the period is comfortably in the past.
       if (immutable && (value !== null || periodEnd < Date.now() - 3 * DAY)) {
@@ -224,10 +283,8 @@ class DukascopyClient {
     const d = new Date(now);
     const curYear = d.getUTCFullYear();
     const out: Candle[] = [];
-    for (let y = curYear - years; y < curYear; y++) {
-      const f = await this.dayFile(instrument, y, now).catch(() => null);
-      if (f) out.push(...f);
-    }
+    const yearFiles = await Promise.all(Array.from({ length: years }, (_, i) => this.dayFile(instrument, curYear - years + i, now).catch(() => null)));
+    for (const f of yearFiles) if (f) out.push(...f);
     // Current year: completed months from hour files, aggregated to days.
     const months: Candle[] = [];
     const files = await Promise.all(Array.from({ length: d.getUTCMonth() }, (_, m) => this.monthHourFile(instrument, curYear, m, now).catch(() => null)));
