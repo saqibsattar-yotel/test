@@ -1,9 +1,10 @@
 type Level = "debug" | "info" | "warn" | "error";
 const order: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
-const threshold = order[(process.env.LOG_LEVEL as Level) ?? "info"] ?? 20;
+// Read at log time, not import time: the root .env is loaded by config.ts, which may be evaluated later.
+const threshold = () => order[(process.env.LOG_LEVEL as Level) ?? "info"] ?? 20;
 
 function emit(level: Level, scope: string, msg: string, extra?: unknown) {
-  if (order[level] < threshold) return;
+  if (order[level] < threshold()) return;
   const ts = new Date().toISOString();
   const line = `${ts} ${level.toUpperCase().padEnd(5)} [${scope}] ${msg}`;
   if (extra !== undefined) console.log(line, typeof extra === "object" ? JSON.stringify(extra).slice(0, 500) : extra);

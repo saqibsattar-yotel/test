@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "dev": "tsx watch --clear-screen=false --include ../../.env --include ../../.env.local src/server.ts",
     "build": "esbuild src/server.ts src/workers/backtest-worker.ts --bundle --platform=node --target=node20 --format=esm --outdir=dist --outbase=src --packages=external --alias:@terminal/core=../../packages/core/src/index.ts",
     "start": "node dist/server.js",
     "test": "vitest run",

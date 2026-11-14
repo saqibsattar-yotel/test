@@ -1,10 +1,17 @@
-import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { loadEnvFiles } from "./lib/env";
+import { parseAllowedOrigins } from "./lib/origin-guard";
 
 /** Repository root: both src/config.ts and dist/server.js sit at depth apps/server/<dir>/. */
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+/**
+ * Env files are read from the repository root whatever the working directory is (the dev script runs
+ * from apps/server). Real environment variables win, then .env.local, then .env.
+ */
+export const loadedEnvFiles = loadEnvFiles(repoRoot);
 
 const schema = z.object({
   PORT: z.coerce.number().default(8787),
@@ -19,6 +26,7 @@ const schema = z.object({
     .default("true")
     .transform((v) => v !== "false" && v !== "0"),
   DEMO_MODE: z.enum(["auto", "force", "off"]).default("auto"),
+  ALLOWED_ORIGINS: z.string().optional().default(""),
   LOG_LEVEL: z.string().default("info"),
 });
 
@@ -31,6 +39,8 @@ export const config = {
   hasAnthropic: parsed.ANTHROPIC_API_KEY.length > 0,
   hasTwelveData: parsed.TWELVEDATA_API_KEY.length > 0,
   hasFred: parsed.FRED_API_KEY.length > 0,
+  /** Which browser origins and Host names may use the API (localhost always may). */
+  originPolicy: parseAllowedOrigins(parsed.ALLOWED_ORIGINS, parsed.HOST),
 };
 
 export type AppConfig = typeof config;

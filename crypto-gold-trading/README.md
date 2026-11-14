@@ -25,6 +25,16 @@ npm run dev                 # server on :8787, web on :5173 (proxied)
 
 Open http://localhost:5173. First run shows a short guided setup.
 
+Development notes:
+
+- `.env` is read from the repository root in every mode (`npm run dev`, `npm start`, tests). An
+  optional, git-ignored `.env.local` overrides it, and real environment variables override both.
+  The server logs which files it loaded (`environment: .env …`).
+- Saving `.env` restarts the API automatically; the Vite proxy follows `PORT` / `HOST` from it.
+- Vite is ready before the API. Requests to `/api` made while the API is starting or restarting are
+  held until it is up (20 s budget, then a clear 503) instead of failing with proxy errors, and the
+  live-quote WebSocket connects only once the API answers.
+
 Production build:
 
 ```bash
@@ -69,10 +79,11 @@ DOGE, AVAX, LINK, XAU) carries hand-tuned metadata and anchors the regime model.
 
 | Variable | Unlocks |
 |---|---|
-| `TWELVEDATA_API_KEY` | Twelve Data becomes the primary XAU/USD source and an extra verification input (Dukascopy + Swissquote stay as fallback) |
-| `FRED_API_KEY` | FRED DGS10 / DGS2 / DFII10 and the broad dollar index |
+| `TWELVEDATA_API_KEY` | Twelve Data becomes the primary XAU/USD source and an extra verification input (Dukascopy + Swissquote stay as fallback). Free key: register at [twelvedata.com/register](https://twelvedata.com/register), then copy it from the API keys page |
+| `FRED_API_KEY` | FRED DGS10 / DGS2 / DFII10 and the broad dollar index. Free key: sign in at [fredaccount.stlouisfed.org/apikeys](https://fredaccount.stlouisfed.org/apikeys) and request one |
 | `ANTHROPIC_API_KEY` (+ `ANTHROPIC_MODEL`, default `claude-opus-5-5`) | Claude-written narratives from the computed fact sheet, with numeric grounding checks |
 | `CALENDAR_FF_FEED=false` | Disable the Forex Factory feed |
+| `ALLOWED_ORIGINS` | Extra browser origins allowed to call the API, comma-separated (for a LAN device, custom hostname or reverse proxy). Pages served from this machine are always allowed; every other website is refused |
 | `DEMO_MODE=auto\|force\|off` | `auto` falls back to labelled demo data only when all providers fail |
 
 Keys stay on the server; the browser only ever sees `/api/features` flags.

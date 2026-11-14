@@ -3,8 +3,9 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import websocket from "@fastify/websocket";
-import { config, featureFlags } from "./config";
+import { config, featureFlags, loadedEnvFiles, repoRoot } from "./config";
 import { logger } from "./lib/logger";
+import { isAllowedOrigin, registerOriginGuard, type OriginPolicy } from "./lib/origin-guard";
 import { cache } from "./lib/cache";
 import { marketRoutes } from "./routes/market";
 import { analysisRoutes } from "./routes/analysis";
@@ -26,10 +27,17 @@ import { alerts } from "./services/alerts";
 
 const log = logger("server");
 
-export async function buildServer() {
+export async function buildServer(opts: { originPolicy?: OriginPolicy } = {}) {
   const app = Fastify({ logger: false, bodyLimit: 20 * 1024 * 1024, forceCloseConnections: true });
-  await app.register(cors, { origin: true });
+  // The API has no login: only pages served from this machine (or origins listed in ALLOWED_ORIGINS) may
+  // call it. The guard runs first, for HTTP requests and WebSocket handshakes alike; CORS headers are then
+  // granted to exactly the origins the guard lets through.
+  const originPolicy = opts.originPolicy ?? config.originPolicy;
+  // Hook order matters: the WebSocket plugin first (it marks upgrade requests so their sockets are cleaned
+  // up), then the guard, then CORS (so a refused preflight never receives CORS headers).
   await app.register(websocket);
+  registerOriginGuard(app, originPolicy, (reason) => log.warn(`blocked request: ${reason}`));
+  await app.register(cors, { delegator: (req, callback) => callback(null, { origin: req.headers.origin !== undefined && isAllowedOrigin(req.headers.origin, req.headers.host, originPolicy) }) });
 
   app.get("/api/health", async () => ({ ok: true, time: Date.now(), cache: cache.stats(), upstream: hub.status(), features: featureFlags() }));
   app.get("/api/features", async () => featureFlags());
@@ -107,6 +115,10 @@ async function main() {
   monitor.start();
   await app.listen({ port: config.PORT, host: config.HOST });
   log.info(`listening on http://${config.HOST}:${config.PORT}  (demo mode: ${config.DEMO_MODE}; AI: ${config.hasAnthropic ? config.ANTHROPIC_MODEL : "rule-based"}; gold: ${config.hasTwelveData ? "Twelve Data + Dukascopy/Swissquote" : "Dukascopy archive + Swissquote live"})`);
+  log.info(`environment: ${loadedEnvFiles.length ? loadedEnvFiles.join(" + ") : "no .env file found, using defaults"} (read from ${repoRoot})`);
+  const extraOrigins = [...config.originPolicy.origins];
+  log.info(`access: browser requests are accepted from this machine only${extraOrigins.length ? `, plus ${extraOrigins.join(", ")}` : ""}`);
+  if (config.originPolicy.invalid.length) log.warn(`ALLOWED_ORIGINS: ignored ${config.originPolicy.invalid.map((e) => `"${e}"`).join(", ")} (expected origins such as http://192.168.1.20:5173)`);
   let shuttingDown = false;
   const shutdown = async () => {
     if (shuttingDown) return;

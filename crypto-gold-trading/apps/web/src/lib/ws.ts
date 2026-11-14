@@ -3,8 +3,23 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { Quote } from "@terminal/core";
 import { useUi } from "./store";
 import type { TriggeredAlert } from "./api";
+import { createReconnectingSocket } from "./socket";
 
 type Msg = { type: "quote"; quote: Quote } | { type: "quotes"; quotes: Quote[] } | { type: "alert"; alert: TriggeredAlert } | { type: "status"; upstream: "live" | "polling" | "demo"; clients: number } | { type: "monitor"; item: unknown };
+
+/**
+ * True when the API answers. The socket is only dialled after this, so a server that is still starting
+ * or restarting never receives a handshake it cannot complete. In development the Vite gate holds this
+ * request until the API is up, which makes the first connection succeed on the first try.
+ */
+async function apiReady(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 /** Maintains one WebSocket to the server and feeds the UI store. */
 export function useMarketSocket() {
@@ -14,18 +29,15 @@ export function useMarketSocket() {
   const setUnread = useUi((s) => s.setUnreadAlerts);
   const qc = useQueryClient();
   useEffect(() => {
-    let ws: WebSocket | null = null;
-    let closed = false;
-    let delay = 1000;
-    const connect = () => {
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${location.host}/ws`);
-      ws.onopen = () => {
-        delay = 1000;
-      };
-      ws.onmessage = (ev) => {
+    const socket = createReconnectingSocket({
+      url: () => `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`,
+      isReady: apiReady,
+      onStatus: (status) => {
+        if (status === "closed") setUpstream("disconnected");
+      },
+      onMessage: (data) => {
         try {
-          const m = JSON.parse(ev.data) as Msg;
+          const m = JSON.parse(data) as Msg;
           if (m.type === "quote") upsert([m.quote]);
           else if (m.type === "quotes") upsert(m.quotes);
           else if (m.type === "status") setUpstream(m.upstream);
@@ -35,21 +47,12 @@ export function useMarketSocket() {
             void qc.invalidateQueries({ queryKey: ["alerts"] });
           } else if (m.type === "monitor") void qc.invalidateQueries({ queryKey: ["monitor"] });
         } catch {
-          /* ignore */
+          /* ignore malformed frames */
         }
-      };
-      ws.onclose = () => {
-        if (closed) return;
-        setUpstream("disconnected");
-        setTimeout(connect, delay);
-        delay = Math.min(15_000, delay * 2);
-      };
-      ws.onerror = () => ws?.close();
-    };
-    connect();
-    return () => {
-      closed = true;
-      ws?.close();
-    };
+      },
+    });
+    // start() is deferred and stop() cancels it, so React StrictMode's throwaway first mount opens nothing.
+    socket.start();
+    return () => socket.stop();
   }, [upsert, setUpstream, pushToast, setUnread, qc]);
 }

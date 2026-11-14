@@ -28,10 +28,16 @@ crypto-gold-trading/
 │  │                       assets (live universe: Binance pairs + CoinGecko enrichment, search),
 │  │                       analysis (wires core engines to data), ai (Claude + grounding),
 │  │                       liquidations (force-order stream), alerts, user state
+│  ├─ lib/                 env (root .env / .env.local loader), origin guard (local pages only:
+│  │                       Host allowlist, Origin check, ALLOWED_ORIGINS), cache, http, logger, JSON store,
+│  │                       backtest runner (worker thread; bundled with esbuild in dev, where
+│  │                       tsx cannot load a TypeScript worker; main-thread fallback)
 │  ├─ routes/              /api/* endpoints
 │  └─ ws/                  /ws hub: Binance miniTicker fan-out, polled spot gold, alerts,
 │                          monitor events, status
 └─ apps/web/               React 18 + Vite + Tailwind terminal UI
+   ├─ dev/                 Vite dev plugin: holds /api until the API server is up, follows
+   │                       PORT/HOST from the root env files, one-line proxy disconnect logs
    ├─ components/          ui kit, charts (lightweight-charts, recharts, SVG), layout, setups
    └─ pages/               Overview, Crypto, Gold, Setups (live / monitoring / history),
                            Technical, Intelligence, Risk, Journal, Performance, Backtest,

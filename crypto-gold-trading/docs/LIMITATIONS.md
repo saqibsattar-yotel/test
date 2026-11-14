@@ -96,4 +96,11 @@ only approximately. Everything here is also surfaced in the UI next to the affec
 ## Operations and security
 - API keys are read from `.env` on the server and never sent to the browser. The server has no
   authentication and is intended to run locally.
+- Browser access is limited to pages served from this machine, plus origins listed in
+  `ALLOWED_ORIGINS`: other websites receive 403 for HTTP requests, CORS preflights and WebSocket
+  handshakes, and unknown `Host` names are refused to stop DNS rebinding. This is not authentication:
+  any program that can reach the port (curl, another local user, another device when
+  `HOST=0.0.0.0`) can still use the API, so keep `HOST=127.0.0.1` unless LAN access is needed.
+- Development mode: a request that is in flight at the moment the API restarts fails once (queries are
+  retried by the UI); requests made while the API is down are held for up to 20 s, then answered 503.
 - All user data (journal, settings, monitors, alerts) lives in JSON files under `data/`.
